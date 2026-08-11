@@ -50,26 +50,26 @@ to watch the diagram while you play — this is the projector view for demos (PR
 
 ```bash
 # 1) Start a game — returns your instance id and the entrance narrative
-curl -s -XPOST http://localhost:8080/dungeon | jq
+curl -s -XPOST http://localhost:8080/api/dungeon | jq
 #   { "instanceId": "01J…", "entrance": { "room": "ENTRANCE", … } }
 ID=<paste instanceId>
 
 # 2) At the fork, choose a path (don't dawdle — the torch is burning)
-curl -s -XPOST http://localhost:8080/dungeon/$ID/choice \
+curl -s -XPOST http://localhost:8080/api/dungeon/$ID/choice \
      -H 'Content-Type: application/json' -d '{"direction":"left"}'
 
 # 3a) LEFT — the Lever Room: pull BOTH levers, in any order (the join)
-curl -s -XPOST http://localhost:8080/dungeon/$ID/lever-a
-curl -s -XPOST http://localhost:8080/dungeon/$ID/lever-b
+curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-a
+curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-b
 
 # 3b) …then the Trap Corridor picks the lock automatically (retries on a jam)
 
 # 4) Check where you are at any time
-curl -s http://localhost:8080/dungeon/$ID | jq
+curl -s http://localhost:8080/api/dungeon/$ID | jq
 
 # List every active session (facilitator race view) / clean one up
-curl -s http://localhost:8080/dungeon | jq
-curl -s -XDELETE http://localhost:8080/dungeon/$ID
+curl -s http://localhost:8080/api/dungeon | jq
+curl -s -XDELETE http://localhost:8080/api/dungeon/$ID
 ```
 
 **Choosing `right`** skips the levers and goes straight to the Trap Corridor.
@@ -80,13 +80,13 @@ entrance. **A jammed lock** that never opens respawns you at the fork after 3 at
 
 | Method & path | Purpose | Req |
 |---|---|---|
-| `POST /dungeon` | Start a session; returns `instanceId` + entrance view | REQ-FUNC-001 |
-| `POST /dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice | REQ-FUNC-002 |
-| `POST /dungeon/{id}/lever-a`, `POST /dungeon/{id}/lever-b` | Pull a lever | REQ-FUNC-003 |
-| `GET /dungeon/{id}` | Inspect current room/narrative/status | REQ-FUNC-007 |
-| `GET /dungeon/{id}/stream` | SSE stream of room transitions + lock attempts (drives the web UI) | REQ-FUNC-007 |
-| `GET /dungeon` | List all sessions | REQ-FUNC-008/012 |
-| `DELETE /dungeon/{id}` | Cancel + forget a session | REQ-FUNC-012 |
+| `POST /api/dungeon` | Start a session; returns `instanceId` + entrance view | REQ-FUNC-001 |
+| `POST /api/dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice | REQ-FUNC-002 |
+| `POST /api/dungeon/{id}/lever-a`, `POST /api/dungeon/{id}/lever-b` | Pull a lever | REQ-FUNC-003 |
+| `GET /api/dungeon/{id}` | Inspect current room/narrative/status | REQ-FUNC-007 |
+| `GET /api/dungeon/{id}/stream` | SSE stream of room transitions + lock attempts (drives the web UI) | REQ-FUNC-007 |
+| `GET /api/dungeon` | List all sessions | REQ-FUNC-008/012 |
+| `DELETE /api/dungeon/{id}` | Cancel + forget a session | REQ-FUNC-012 |
 
 Player moves become CloudEvents published **directly into the engine's in-process event broker**,
 correlated to your instance via the `dungeoninstance` extension attribute. There is **no Kafka and
@@ -191,20 +191,27 @@ automatically.
 
 ### 3. Deploying on the DataRobot Workload API
 
-[`deploy/datarobot/workload.yaml`](deploy/datarobot/workload.yaml) is the workload spec. The
-`dr workload` command group is still feature-flagged client-side:
+**[`deploy/datarobot/README.md`](deploy/datarobot/README.md) is the full operator guide** — deploy,
+rolling update, verification checklist and a symptom→cause→fix table.
+[`workload.yaml`](deploy/datarobot/workload.yaml) is the spec. The `dr workload` command group is
+still feature-flagged client-side (without the env var the CLI just prints top-level help, which
+reads like a broken install):
 
 ```bash
 DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/datarobot/workload.yaml
 ```
 
-Three platform constraints are worth knowing before you change that spec:
+Four platform constraints are worth knowing before you change that spec:
 
 * **Images must include a `linux/amd64` manifest.** Apple Silicon defaults to arm64 and the container
   crash-loops with `exec format error`. Build multi-arch:
   `-Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64`.
 * **Containers run non-root on a read-only root filesystem.** This is why the UI is served by Quarkus
   (uid 185, no writable paths needed) instead of nginx, which cannot start under either constraint.
+* **The workload is served under a URL prefix** (`/api/v2/endpoints/workloads/<id>/`) that the edge
+  **strips inbound** and never re-adds to responses. The app makes itself mount-point aware at
+  startup from the injected `WORKLOAD_ID`; every new URL must go through SvelteKit's `base` or it
+  will silently escape the mount. See the operator guide for the mechanism.
 * **`replicaCount` must stay 1.** `GameStore` is an in-memory map with no persistence, so a second
   replica would 404 any session started on the other pod. Autoscaling must stay off.
 
@@ -244,10 +251,23 @@ mvn clean package -DskipTests -Dquarkus.container-image.build=true -Dquarkus.con
 - **Inspection read-model:** `GameStore` mirrors the current room per instance as the workflow
   enters it. This is projection/observation, not game logic — routing/joins/retries/timeouts all
   stay in the workflow definition (C-1).
-- **Completion vs. inspection:** `GET /dungeon/{id}` returns `200` with the victory view once an
+- **Completion vs. inspection:** `GET /api/dungeon/{id}` returns `200` with the victory view once an
   instance completes, so the player actually sees the win (REQ-FUNC-006), and `404` only when the id
   is unknown or cleaned up. Strict REQ-FUNC-007 ("`404` after completion") is a one-line change in
   `DungeonResource.inspect`.
+- **One container, UI included (C-3):** Quarkus serves the SvelteKit build from
+  `META-INF/resources` at `/` and moves the API under `/api` (`quarkus.rest.path`), so the two halves
+  line up with no reverse proxy. An nginx sidecar was tried first and is *impossible* on the Workload
+  API, which runs containers non-root on a read-only filesystem. The UI build is not committed, so
+  `npm run build` + copy is a prerequisite of `mvn package` — [`scripts/run-local.sh`](scripts/run-local.sh)
+  exists so that step cannot be forgotten.
+- **Mount-point awareness:** the app must work both at `/` and under a deployment prefix. It is built
+  with a sentinel `kit.paths.base` that
+  [`SpaFallbackRoute`](src/main/java/org/acme/dungeon/SpaFallbackRoute.java) substitutes at startup
+  from `WORKLOAD_ID`; absent that env var the substitution collapses to `""` and everything is
+  root-absolute, so local and deployed share one code path. Fixing asset URLs alone is not enough —
+  SvelteKit compiles `base` into the client bundle, and a stale `''` makes its router reject the very
+  first URL. Details in [`deploy/datarobot/README.md`](deploy/datarobot/README.md).
 
 ### Verify-first checklist (things to sanity-check on first `mvn test`)
 
