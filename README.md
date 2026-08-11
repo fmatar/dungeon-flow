@@ -120,89 +120,98 @@ mvn test
 
 ## Containerization & Docker Compose (REQ-FUNC-009 / PRD-FEAT-08)
 
-This project is fully containerized and configured for both local development and remote registry publishing.
+The game ships as **one image**. Quarkus serves the SvelteKit build at `/` and the game API under
+`/api` (`quarkus.rest.path=/api`), so there is no nginx sidecar and no second container — SRS
+constraint C-3 taken literally. Client-side routes like `/race` are rewritten to `index.html` by
+[`SpaFallbackRoute`](src/main/java/org/acme/dungeon/SpaFallbackRoute.java).
 
-### 1. Building Container Images Locally
+### 1. Building the image locally
 
-You can build local versions of both images directly from source without downloading anything:
+The UI build is **not** committed, so it has to be produced and copied into the jar's static
+resources before packaging:
 
-* **Backend (Quarkus JVM)**: Build via the Quarkus Maven extension using the local Docker daemon:
-  ```bash
-  # Packages the jar and builds the local image ghcr.io/fmatar/dungeon-flow:latest
-  mvn clean package -DskipTests -Dquarkus.container-image.build=true
-  ```
-  *(Under the hood, Quarkus will use the [`src/main/docker/Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image
-  coordinates come from `quarkus.container-image.*` in
-  [`application.properties`](src/main/resources/application.properties); `build`/`push` are
-  deliberately **not** set there, so a plain `mvn package` never touches Docker or a registry.)*
+```bash
+npm --prefix web run build
+```
 
-* **Frontend (SvelteKit + Nginx)**: Build the multi-stage static asset + Nginx server image:
-  ```bash
-  # Build the UI image locally
-  docker build -t dungeon-flow-ui:latest -f web/Dockerfile web/
-  ```
+```bash
+cp -R web/build/. src/main/resources/META-INF/resources/
+```
+
+```bash
+mvn clean package -DskipTests -Dquarkus.container-image.build=true
+```
+
+*(Quarkus uses the [`src/main/docker/Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image
+coordinates come from `quarkus.container-image.*` in
+[`application.properties`](src/main/resources/application.properties); `build`/`push` are
+deliberately **not** set there, so a plain `mvn package` never touches Docker or a registry.)*
 
 ---
 
-### 2. Running Locally with Docker Compose (No Downloading)
-
-By default [`docker-compose.yaml`](docker-compose.yaml) pulls the two published images:
+### 2. Running locally with Docker Compose
 
 ```bash
 docker compose up
 ```
 
-* **Play Game (UI)**: [http://localhost:5173](http://localhost:5173) or [http://localhost:80](http://localhost:80)
-* **Backend API**: [http://localhost:8080](http://localhost:8080)
+* **Play the game**: [http://localhost:8080](http://localhost:8080) (also mapped to
+  [:5173](http://localhost:5173) for muscle memory)
+* **API**: [http://localhost:8080/api/dungeon](http://localhost:8080/api/dungeon)
 
-To run **your local source** instead, note that the two services differ:
+There is no `build:` context — the image is assembled by Maven, not Docker
+([`Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) copies a prebuilt `target/quarkus-app/`). Run
+section 1 first; it tags the exact name Compose references, so your local build is picked up
+automatically.
 
-* The **frontend** has a self-contained multi-stage `build:` context, so `docker compose up --build`
-  rebuilds the UI from `web/` directly.
-* The **backend** image is assembled by Maven, not by Docker —
-  [`Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) copies a prebuilt `target/quarkus-app/`, so it
-  cannot be built by Compose from a clean tree. Run the Maven command from section 1 first; it tags
-  the image with the exact name Compose references, so your local build is picked up automatically:
-
-```bash
-mvn clean package -DskipTests -Dquarkus.container-image.build=true   # backend, via Maven
-docker compose up --build                                            # frontend from source + launch
-```
-
-> The backend container is a **production JVM image, so it has no Quarkus Dev UI** — there is no
-> workflow diagram at `/q/dev-ui` here. The projector view needs `mvn quarkus:dev` (see [Run
-> it](#run-it)). Compose is for playing the game, not for demoing the diagram.
+> This is a **production JVM image, so it has no Quarkus Dev UI** — there is no workflow diagram at
+> `/q/dev-ui` here. The projector view needs `mvn quarkus:dev` (see [Run it](#run-it)). Compose is
+> for playing the game, not for demoing the diagram.
 
 ---
 
-### 3. Publishing to GitHub Container Registry (GHCR)
+### 3. Deploying on the DataRobot Workload API
+
+[`deploy/datarobot/workload.yaml`](deploy/datarobot/workload.yaml) is the workload spec. The
+`dr workload` command group is still feature-flagged client-side:
+
+```bash
+DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/datarobot/workload.yaml
+```
+
+Three platform constraints are worth knowing before you change that spec:
+
+* **Images must include a `linux/amd64` manifest.** Apple Silicon defaults to arm64 and the container
+  crash-loops with `exec format error`. Build multi-arch:
+  `-Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64`.
+* **Containers run non-root on a read-only root filesystem.** This is why the UI is served by Quarkus
+  (uid 185, no writable paths needed) instead of nginx, which cannot start under either constraint.
+* **`replicaCount` must stay 1.** `GameStore` is an in-memory map with no persistence, so a second
+  replica would 404 any session started on the other pod. Autoscaling must stay off.
+
+---
+
+### 4. Publishing to GitHub Container Registry (GHCR)
 
 First, authenticate with `ghcr.io` (ensure your GitHub CLI token has `write:packages` scope):
 ```bash
-# Refresh token with packaging scopes if needed
 gh auth refresh -h github.com -s write:packages
+```
 
-# Authenticate Docker daemon to GHCR
+```bash
 gh auth token | docker login ghcr.io -u fmatar --password-stdin
 ```
 
-* **Publish the Backend**: Build and push in one step directly through Maven properties:
-  ```bash
-  mvn clean package -DskipTests -Pnative \
-    -Dquarkus.container-image.build=true \
-    -Dquarkus.container-image.push=true \
-    -Dquarkus.container-image.registry=ghcr.io \
-    -Dquarkus.container-image.group=fmatar \
-    -Dquarkus.container-image.name=dungeon-flow \
-    -Dquarkus.docker.buildx.platform=linux/amd64 \
-    -Dquarkus.container-image.tag=latest
-  ```
+Then build and push in one step. Do the `npm run build` + copy from section 1 first, or you will
+publish an image with a stale UI. **`linux/amd64` is required** for the Workload API; keeping
+`arm64` in the same manifest means the same tag still runs natively on Apple Silicon:
 
-* **Publish the Frontend UI**: Tag and push the UI image:
-  ```bash
-  docker tag dungeon-flow-ui:latest ghcr.io/fmatar/dungeon-flow-ui:latest
-  docker push ghcr.io/fmatar/dungeon-flow-ui:latest
-  ```
+```bash
+mvn clean package -DskipTests -Dquarkus.container-image.build=true -Dquarkus.container-image.push=true -Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64
+```
+
+> The old `ghcr.io/fmatar/dungeon-flow-ui` image is no longer used — the UI ships inside the backend
+> image now. Nothing references it; delete it from GHCR when convenient.
 
 ## Design decisions
 

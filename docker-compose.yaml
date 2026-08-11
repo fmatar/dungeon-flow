@@ -1,24 +1,17 @@
+# One service, one container: Quarkus serves the SvelteKit UI at / and the game API
+# under /api. The separate nginx frontend service is gone - it existed only to serve
+# static files and reverse-proxy /api, both of which the backend now does itself
+# (SRS constraint C-3). See deploy/datarobot/workload.yaml for why.
+#
+# The image is assembled by Maven, not by Docker, so there is no build: context here.
+# Rebuild it from source with:
+#   npm --prefix web run build
+#   cp -R web/build/. src/main/resources/META-INF/resources/
+#   mvn clean package -DskipTests -Dquarkus.container-image.build=true
 services:
-  backend:
+  app:
     image: ghcr.io/fmatar/dungeon-flow:latest
     ports:
-      # Exposed so you can curl the API directly alongside the UI. Note this is a
-      # production JVM image, so there is no Quarkus Dev UI here - the workflow
-      # diagram needs `mvn quarkus:dev` (see README > Run it).
       - "8080:8080"
-    restart: unless-stopped
-
-  frontend:
-    image: ghcr.io/fmatar/dungeon-flow-ui:latest
-    # Self-contained multi-stage build, so `docker compose up --build` rebuilds the
-    # UI straight from web/. The backend has no build: stanza on purpose - its image
-    # is assembled by Maven (see README > Containerization).
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-      - "5173:80" # Map 5173 to support local dev port expectations
-    depends_on:
-      - backend
+      - "5173:8080" # keep the port local dev muscle-memory expects
     restart: unless-stopped

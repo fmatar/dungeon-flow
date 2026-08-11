@@ -20,11 +20,12 @@ export default defineConfig({
 	server: {
 		// Dev-only proxy: the browser stays same-origin on :5173 and calls /api/*, which is
 		// forwarded to the Quarkus backend on :8080. Avoids CORS and works for SSE streams too.
+		// NOTE: no rewrite. The backend serves its REST endpoints under /api itself
+		// (quarkus.rest.path=/api), so the prefix must be passed through, not stripped.
 		proxy: {
 			'/api': {
 				target: 'http://localhost:8080',
-				changeOrigin: true,
-				rewrite: (path) => path.replace(/^\/api/, '')
+				changeOrigin: true
 			}
 		}
 	}

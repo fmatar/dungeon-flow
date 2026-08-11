@@ -54,7 +54,7 @@ class DungeonResourceTest {
     void start_returns_entrance() {
         given()
                 .when()
-                .post("/dungeon")
+                .post("/api/dungeon")
                 .then()
                 .statusCode(201)
                 .body("instanceId", notNullValue())
@@ -67,7 +67,7 @@ class DungeonResourceTest {
     void full_playthrough_right_path() {
         String id = given()
                 .when()
-                .post("/dungeon")
+                .post("/api/dungeon")
                 .then()
                 .statusCode(201)
                 .extract().path("instanceId");
@@ -76,14 +76,14 @@ class DungeonResourceTest {
                 .contentType(ContentType.JSON)
                 .body(Map.of("direction", "right"))
                 .when()
-                .post("/dungeon/{id}/choice", id)
+                .post("/api/dungeon/{id}/choice", id)
                 .then()
                 .statusCode(202);
 
         await().atMost(ofSeconds(10)).untilAsserted(() ->
                 given()
                         .when()
-                        .get("/dungeon/{id}", id)
+                        .get("/api/dungeon/{id}", id)
                         .then()
                         .statusCode(200)
                         .body("status", equalTo("COMPLETED"))
@@ -96,7 +96,7 @@ class DungeonResourceTest {
     void inspect_unknown_is_404() {
         given()
                 .when()
-                .get("/dungeon/{id}", "does-not-exist")
+                .get("/api/dungeon/{id}", "does-not-exist")
                 .then()
                 .statusCode(404);
     }
@@ -104,30 +104,30 @@ class DungeonResourceTest {
     @Test
     @DisplayName("REQ-FUNC-002: an unknown direction keeps the player at the fork (respawn)")
     void unknown_direction_respawns_to_fork() {
-        String id = given().when().post("/dungeon").then().statusCode(201)
+        String id = given().when().post("/api/dungeon").then().statusCode(201)
                 .extract().path("instanceId");
 
         given().contentType(ContentType.JSON).body(Map.of("direction", "sideways"))
-                .when().post("/dungeon/{id}/choice", id)
+                .when().post("/api/dungeon/{id}/choice", id)
                 .then().statusCode(202);
 
         // It must not complete or fault; it loops back to the fork and keeps waiting.
         await().during(ofSeconds(1)).atMost(ofSeconds(3)).untilAsserted(() ->
-                given().when().get("/dungeon/{id}", id)
+                given().when().get("/api/dungeon/{id}", id)
                         .then().statusCode(200).body("view.room", equalTo("FORK")));
     }
 
     @Test
     @DisplayName("REQ-FUNC-012 support: list shows sessions and cleanup removes them")
     void list_and_cleanup() {
-        String id = given().when().post("/dungeon").then().statusCode(201)
+        String id = given().when().post("/api/dungeon").then().statusCode(201)
                 .extract().path("instanceId");
 
-        Integer countWith = given().when().get("/dungeon").then().statusCode(200)
+        Integer countWith = given().when().get("/api/dungeon").then().statusCode(200)
                 .extract().path("size()");
         assertThat(countWith).isGreaterThanOrEqualTo(1);
 
-        given().when().delete("/dungeon/{id}", id).then().statusCode(204);
-        given().when().get("/dungeon/{id}", id).then().statusCode(404);
+        given().when().delete("/api/dungeon/{id}", id).then().statusCode(204);
+        given().when().get("/api/dungeon/{id}", id).then().statusCode(404);
     }
 }
