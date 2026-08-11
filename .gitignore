@@ -1,0 +1,24 @@
+# Maven / build
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# Quarkus
+.quarkus/
+
+# IDE
+.idea/*
+!.idea/checkstyle-idea.xml
+!.idea/google-java-format.xml
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# Logs
+*.log

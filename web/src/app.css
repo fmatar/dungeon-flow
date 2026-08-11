@@ -1,0 +1,138 @@
+@import 'tailwindcss';
+@import '@skeletonlabs/skeleton';
+@import '@skeletonlabs/skeleton-svelte';
+@import '@skeletonlabs/skeleton/themes/terminus';
+
+/* Let Tailwind discover the utility classes used inside Skeleton's Svelte components. */
+@source '../node_modules/@skeletonlabs/skeleton-svelte/dist';
+
+/* Recolor the terminus theme's accent from its default violet to phosphor green, so every
+   Skeleton primary token (buttons, badges, borders, text) reads as a classic terminal. */
+[data-theme='terminus'] {
+	--color-primary-50: #eafff3;
+	--color-primary-100: #ccffe1;
+	--color-primary-200: #99f6c4;
+	--color-primary-300: #5ff0a3;
+	--color-primary-400: #34e08a;
+	--color-primary-500: #22c55e;
+	--color-primary-600: #16a34a;
+	--color-primary-700: #15803d;
+	--color-primary-800: #166534;
+	--color-primary-900: #124d29;
+	--color-primary-950: #0a2e18;
+	--color-primary-contrast-dark: #04140b;
+}
+
+/* ---------------------------------------------------------------------------
+   Retro-terminal flourishes on top of the Skeleton "terminus" theme.
+   Green phosphor, scanlines, a blinking cursor - the curl origins, dressed up.
+--------------------------------------------------------------------------- */
+
+:root {
+	--crt-green: #4ade80;
+	--crt-green-dim: #22c55e;
+	--crt-amber: #fbbf24;
+}
+
+html,
+body {
+	height: 100%;
+	background: #05070a;
+}
+
+body {
+	font-family: 'DejaVu Sans Mono', 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* Faint scanlines + vignette over the whole app for the CRT feel. */
+.crt::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 50;
+	background:
+		repeating-linear-gradient(
+			to bottom,
+			rgba(0, 0, 0, 0) 0px,
+			rgba(0, 0, 0, 0) 2px,
+			rgba(0, 0, 0, 0.18) 3px
+		),
+		radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+.text-glow {
+	text-shadow: 0 0 6px rgba(74, 222, 128, 0.55);
+}
+
+.text-amber-glow {
+	color: var(--crt-amber);
+	text-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+}
+
+/* Blinking block cursor for the terminal prompt. */
+.cursor::after {
+	content: '\2588';
+	margin-left: 0.15ch;
+	animation: blink 1s step-end infinite;
+	color: var(--crt-green);
+}
+
+@keyframes blink {
+	50% {
+		opacity: 0;
+	}
+}
+
+/* The player token pulsing on the room map. */
+.token {
+	animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+	0%,
+	100% {
+		opacity: 1;
+		text-shadow: 0 0 10px rgba(74, 222, 128, 0.9);
+	}
+	50% {
+		opacity: 0.55;
+		text-shadow: 0 0 2px rgba(74, 222, 128, 0.4);
+	}
+}
+
+/* Respawn / jam shake. */
+.shake {
+	animation: shake 0.4s ease-in-out;
+}
+
+@keyframes shake {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+	20%,
+	60% {
+		transform: translateX(-4px);
+	}
+	40%,
+	80% {
+		transform: translateX(4px);
+	}
+}
+
+/* New narrative lines fade/slide in like they're being typed to screen. */
+.line-in {
+	animation: lineIn 0.25s ease-out both;
+}
+
+@keyframes lineIn {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
