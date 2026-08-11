@@ -243,62 +243,120 @@ info "staged $(find "$STATIC_DIR" -type f | wc -l | tr -d ' ') files"
 # ===========================================================================
 # 3. Build (and optionally push) the image
 # ===========================================================================
-MVN_ARGS=(-B clean package -Dquarkus.container-image.build=true)
-if [[ $WITH_TESTS -eq 1 ]]; then
-    step "Building the image (running tests)"
-else
-    step "Building the image (skipping tests)"
-    MVN_ARGS+=(-DskipTests)
-fi
+# Image coordinates, passed explicitly rather than relying on application.properties,
+# so the command this script runs is self-describing and cannot drift from the file.
+prop() { sed -n "s/^$1=//p" "$REPO_ROOT/src/main/resources/application.properties" | tail -1; }
+IMG_REG=$(prop 'quarkus\.container-image\.registry'); : "${IMG_REG:=ghcr.io}"
+IMG_GRP=$(prop 'quarkus\.container-image\.group');    : "${IMG_GRP:=fmatar}"
+IMG_NAME=$(prop 'quarkus\.container-image\.name');    : "${IMG_NAME:=dungeon-flow}"
+IMG_TAG=$(prop 'quarkus\.container-image\.tag');      : "${IMG_TAG:=latest}"
 
 NATIVE_TAG=""
 if [[ $DO_NATIVE -eq 1 ]]; then
-    # Tagged per-arch so a native build never overwrites the JVM :latest that
-    # docker-compose and the deployed workload spec both reference by default.
+    # Per-arch tag. A native image holds exactly ONE architecture's binary, so it must
+    # never land on :latest - that tag is the multi-arch JVM image the deployed
+    # dungeon-flow workload runs, and overwriting it would reassign that deployment's
+    # artifact on its next replacement (and break it, since :latest would then be
+    # single-arch). This has actually happened, hence the hard guard below.
     NATIVE_TAG="native-${PLATFORM##*/}"
-    # -DskipITs because the `native` profile flips skipITs to false; there are no
-    # *IT classes today, so leave that switch to a deliberate choice.
-    MVN_ARGS+=(-Dnative -DskipITs
-               -Dquarkus.native.container-build=true
-               -Dquarkus.container-image.tag="$NATIVE_TAG")
-    info "native build inside a Linux builder container (no local GraalVM needed)"
-    info "target: $PLATFORM  ->  image tag :$NATIVE_TAG"
-    if [[ $PLATFORM != "$HOST_PLATFORM" ]]; then
-        # GraalVM does not cross-compile; the only way to get a foreign-arch binary
-        # is to emulate the whole builder container.
-        MVN_ARGS+=(-Dquarkus.native.container-runtime-options=--platform="$PLATFORM")
-        warn "$PLATFORM != host $HOST_PLATFORM, so native-image runs EMULATED."
-        warn "Expect many minutes, and an OOM here means the builder needs more"
-        warn "memory: add -Dquarkus.native.native-image-xmx=6g (and raise Docker's RAM)."
-    fi
+    IMG_TAG=$NATIVE_TAG
+fi
+IMAGE="$IMG_REG/$IMG_GRP/$IMG_NAME:$IMG_TAG"
+
+if [[ $DO_NATIVE -eq 1 && $IMG_TAG == latest ]]; then
+    die "refusing to build a native image tagged ':latest'.
+    :latest is the multi-arch JVM image that the deployed 'dungeon-flow' workload
+    runs. Native images are single-architecture, so putting one there breaks that
+    deployment. Native builds use the native-<arch> tag instead."
 fi
 
-if [[ $DO_PUSH -eq 1 ]]; then
-    MVN_ARGS+=(-Dquarkus.container-image.push=true)
-    if [[ $DO_NATIVE -eq 1 ]]; then
-        # A native image contains one architecture's binary; there is no multi-arch
-        # manifest to assemble the way the JVM image gets one.
-        info "push enabled: single-arch $PLATFORM -> ghcr.io :$NATIVE_TAG"
-    else
-        info "push enabled: multi-arch linux/amd64,linux/arm64 -> ghcr.io"
+MVN_ARGS=(-B clean package
+          -Dquarkus.container-image.registry="$IMG_REG"
+          -Dquarkus.container-image.group="$IMG_GRP"
+          -Dquarkus.container-image.name="$IMG_NAME"
+          -Dquarkus.container-image.tag="$IMG_TAG")
+if [[ $WITH_TESTS -eq 1 ]]; then
+    step "Building (running tests)"
+else
+    step "Building (skipping tests)"
+    MVN_ARGS+=(-DskipTests)
+fi
+
+if [[ $DO_NATIVE -eq 1 ]]; then
+    # Maven produces only the BINARY here; the image is assembled by buildx below.
+    # Letting Maven build the image would tag it with the host architecture, which
+    # silently produces an image whose manifest says arm64 while its entrypoint is an
+    # x86-64 ELF - it lies about itself, and neither the image size nor a local run
+    # reveals it. buildx --platform is what makes the manifest match the binary.
+    # -DskipITs because the `native` profile flips skipITs to false; there are no
+    # *IT classes today, so leave that switch to a deliberate choice.
+    MVN_ARGS+=(-Dnative -DskipITs -Dquarkus.native.container-build=true)
+    info "native build inside a Linux builder container (no local GraalVM needed)"
+    info "target: $PLATFORM  ->  $IMAGE"
+    if [[ $PLATFORM != "$HOST_PLATFORM" ]]; then
+        # GraalVM does not cross-compile; a foreign-arch binary needs the whole
+        # builder container emulated.
+        MVN_ARGS+=(-Dquarkus.native.container-runtime-options=--platform="$PLATFORM")
+        warn "$PLATFORM != host $HOST_PLATFORM, so native-image runs EMULATED."
+        warn "Expect many minutes. If it dies reading the runner jar or OOMs, build on"
+        warn "an amd64 host (CI) instead - emulated native-image is fragile."
+    fi
+else
+    MVN_ARGS+=(-Dquarkus.container-image.build=true)
+    if [[ $DO_PUSH -eq 1 ]]; then
+        info "push enabled: multi-arch linux/amd64,linux/arm64 -> $IMAGE"
         info "${DIM}amd64 is required by the DataRobot Workload API; arm64 keeps it native on Apple Silicon${RST}"
-        MVN_ARGS+=(-Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64)
+        MVN_ARGS+=(-Dquarkus.container-image.push=true
+                   -Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64)
     fi
 fi
 mvn "${MVN_ARGS[@]}"
 
-# Resolve the image name from the properties rather than hardcoding it.
-prop() { sed -n "s/^$1=//p" "$REPO_ROOT/src/main/resources/application.properties" | tail -1; }
-IMG_REG=$(prop 'quarkus\.container-image\.registry')
-IMG_GRP=$(prop 'quarkus\.container-image\.group')
-IMG_NAME=$(prop 'quarkus\.container-image\.name')
-IMG_TAG=$(prop 'quarkus\.container-image\.tag')
-[[ -n $NATIVE_TAG ]] && IMG_TAG=$NATIVE_TAG
-IMAGE="${IMG_REG:+$IMG_REG/}${IMG_GRP:+$IMG_GRP/}${IMG_NAME:-dungeon-flow}:${IMG_TAG:-latest}"
+# --- native: assemble the image ourselves, with the arch stamped correctly ---
+if [[ $DO_NATIVE -eq 1 ]]; then
+    step "Packaging the native binary into a $PLATFORM image"
+    RUNNER=$(find "$REPO_ROOT/target" -maxdepth 1 -name '*-runner' -type f | head -1)
+    [[ -n $RUNNER ]] || die "no native binary in target/. The Maven build above did not produce one."
+    info "binary: $(basename "$RUNNER") ($(du -h "$RUNNER" | cut -f1)), $(file -b "$RUNNER" | cut -d, -f2 | tr -d ' ')"
+    # --load so the exact image we just built is available locally for the smoke
+    # test; the push below then sends that same image rather than a rebuild.
+    docker buildx build --platform "$PLATFORM" \
+        -f "$REPO_ROOT/src/main/docker/Dockerfile.native" \
+        -t "$IMAGE" --load "$REPO_ROOT"
+
+    # Three-way check: manifest arch, native layout, and the binary's real ELF arch,
+    # extracted without running it so emulation cannot mask a mismatch. Any one of
+    # these disagreeing is the difference between a working deploy and a crash-loop.
+    step "Verifying the image is genuinely native and $PLATFORM"
+    IMG_ARCH=$(docker image inspect "$IMAGE" --format '{{.Architecture}}/{{.Os}}')
+    CID=$(docker create "$IMAGE")
+    if docker cp "$CID:/work/application" /tmp/dungeon-native-check >/dev/null 2>&1; then
+        LAYOUT=NATIVE
+    else
+        LAYOUT="NOT-NATIVE"
+    fi
+    docker rm "$CID" >/dev/null
+    BIN_ARCH=$(file -b /tmp/dungeon-native-check 2>/dev/null | cut -d, -f2 | tr -d ' ')
+    rm -f /tmp/dungeon-native-check
+    printf '    %-14s %s\n' "image arch:" "$IMG_ARCH"
+    printf '    %-14s %s\n' "layout:"     "$LAYOUT"
+    printf '    %-14s %s\n' "binary arch:" "${BIN_ARCH:-unknown}"
+    [[ $IMG_ARCH == "${PLATFORM##*/}/${PLATFORM%%/*}" ]] \
+        || die "image manifest is $IMG_ARCH but $PLATFORM was requested."
+    [[ $LAYOUT == NATIVE ]] \
+        || die "this is not a native image - /work/application is missing."
+
+    if [[ $DO_PUSH -eq 1 ]]; then
+        step "Pushing $IMAGE"
+        info "single-arch $PLATFORM - a native image has no multi-arch manifest"
+        docker push "$IMAGE"
+    fi
+fi
 
 if [[ $DO_PUSH -eq 1 ]]; then
-    # A multi-arch buildx build pushes straight to the registry without ever
-    # loading into the local daemon, so a local lookup would wrongly fail here.
+    # A multi-arch JVM push goes straight from buildx to the registry without ever
+    # loading into the local daemon, so a local image lookup would wrongly fail here.
+    # Native images were --load-ed and verified above, so they are present either way.
     info "pushed $IMAGE"
 else
     docker image inspect "$IMAGE" >/dev/null 2>&1 \
