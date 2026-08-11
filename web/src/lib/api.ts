@@ -1,8 +1,16 @@
 import type { StartResponse, StateResponse } from './types';
 
+import { base } from '$app/paths';
+
 // All calls go through the /api prefix, which the Vite dev server proxies to the Quarkus
-// backend on :8080 (and which the backend itself can serve in production).
-const BASE = '/api/dungeon';
+// backend on :8080 (and which the backend itself serves in production).
+//
+// Prefixed with SvelteKit's `base` rather than hardcoded as '/api/dungeon', because the app is not
+// always served from the domain root: on the DataRobot Workload API it is mounted under
+// /api/v2/endpoints/workloads/<id>/, and a root-absolute URL would escape the workload and hit
+// DataRobot's own API instead. `base` is '' locally and the mount path when deployed, so there is
+// no branching here - see SpaFallbackRoute for how it is substituted at container startup.
+const BASE = `${base}/api/dungeon`;
 
 async function ok(res: Response): Promise<Response> {
 	if (!res.ok) {
