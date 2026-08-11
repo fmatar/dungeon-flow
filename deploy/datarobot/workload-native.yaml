@@ -1,0 +1,63 @@
+# Dungeon Flow — NATIVE variant, on the DataRobot Workload API
+# ---------------------------------------------------------------------------
+# A second workload alongside the JVM one, running a GraalVM native binary. Deploy with:
+#   DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/datarobot/workload-native.yaml
+#
+# Why a separate workload rather than replacing the JVM one: the JVM deployment stays
+# up as a known-good fallback, and having both side by side makes the difference
+# demonstrable live - which is the point, since this project's product is pedagogy.
+#
+# Measured locally, like for like on arm64 (see the main README):
+#                 JVM        native
+#   image         661 MB     253 MB
+#   startup       2.018s     0.023s
+#   RSS           176.7 MiB   12.0 MiB
+#
+# The image tag is native-amd64, NOT :latest. Two reasons that matter:
+#   1. :latest is the JVM image the other workload runs - overwriting it would
+#      silently reassign that deployment's artifact on its next replacement;
+#   2. a native image contains exactly ONE architecture (GraalVM does not
+#      cross-compile), so there is no multi-arch manifest to hide behind. It must
+#      be built for linux/amd64 or the container dies with `exec format error`.
+name: dungeon-flow-native
+importance: low
+
+artifact:
+  name: dungeon-flow-native-artifact
+  spec:
+    type: service
+    containerGroups:
+      - name: default
+        containers:
+          - name: app
+            imageUri: ghcr.io/fmatar/dungeon-flow:native-amd64
+            primary: true
+            # Must be >= 1024. Quarkus already defaults here.
+            port: 8080
+            # Same probe shape as the JVM workload, which is the config verified to
+            # survive on this platform. `/` is a static file out of the binary, so
+            # readiness does not depend on the REST layer or a warm workflow engine.
+            # There is deliberately no livenessProbe - see the JVM spec for the
+            # exit-143 crash-loop that earlier probe settings caused.
+            readinessProbe:
+              path: /
+              port: 8080
+              initialDelaySeconds: 15
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 30
+
+runtime:
+  containerGroups:
+    - name: default
+      # MUST stay 1: GameStore is an in-memory map with no persistence, so a second
+      # replica would 404 any session started on the other pod. Autoscaling stays off.
+      # This is a property of the app, not of the JVM, so native changes nothing here.
+      replicaCount: 1
+      containers:
+        - name: app
+          resourceAllocation:
+            # Sized for a native binary that idles around 12 MiB. Still generous by a
+            # wide margin; the JVM workload asks for 1GB and 1 full CPU.
+            cpu: 0.5
+            memory: "256MB"

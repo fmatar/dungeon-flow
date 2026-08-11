@@ -3,8 +3,43 @@
 Everything needed to deploy, update, verify and debug the game as a managed container workload.
 The spec itself is [`workload.yaml`](workload.yaml).
 
-Currently deployed: workload `6a7b6224ecdfd1a7d5af88dd`
-([console](https://app.datarobot.com/console-nextgen/workloads/6a7b6224ecdfd1a7d5af88dd/overview)).
+Two workloads are deployed, from the same source:
+
+| Workload | Spec | Image | Id |
+|---|---|---|---|
+| `dungeon-flow` (JVM) | [`workload.yaml`](workload.yaml) | `:latest` (multi-arch) | `6a7b6224ecdfd1a7d5af88dd` |
+| `dungeon-flow-native` | [`workload-native.yaml`](workload-native.yaml) | `:native-amd64` | `6a7b8c65d3fbe94acee03c4d` |
+
+The JVM one is the known-good fallback; the native one asks for a quarter of the memory
+(256MB vs 1GB) and starts in ~50ms. Keeping both makes the difference demonstrable live.
+
+### Building the native image is not symmetric with the JVM one
+
+The JVM image is built multi-arch in one step, so architecture never comes up. A native image
+contains exactly one architecture's binary, and **two independent things must both be amd64**:
+
+1. **the binary** — GraalVM does not cross-compile, so on an ARM Mac this needs
+   `-Dquarkus.native.container-runtime-options=--platform=linux/amd64` (emulated, slow); and
+2. **the image manifest** — a plain `docker build` on an ARM host stamps `arm64` around it.
+
+Getting (1) right and (2) wrong produces an image that lies about itself: the manifest says arm64
+while the entrypoint is an x86-64 ELF. Docker on a Mac then fails it with `exec format error`, and
+on the platform the behaviour depends on how strictly containerd checks the config — i.e. it might
+appear to work. Build the image explicitly:
+
+```bash
+docker buildx build --platform linux/amd64 -f ../../src/main/docker/Dockerfile.native -t ghcr.io/fmatar/dungeon-flow:native-amd64 --load .
+```
+
+Then verify all three facts agree before pushing — image arch, layout, and the real ELF arch,
+extracted without running it so no emulation is involved:
+
+```bash
+IMG=ghcr.io/fmatar/dungeon-flow:native-amd64; docker image inspect "$IMG" --format 'arch={{.Architecture}}/{{.Os}}'; CID=$(docker create "$IMG"); docker cp "$CID:/work/application" /tmp/dfbin >/dev/null 2>&1 && echo "layout=NATIVE"; docker rm "$CID" >/dev/null; file -b /tmp/dfbin | cut -d, -f1-2
+```
+
+Expect `arch=amd64/linux`, `layout=NATIVE`, `ELF 64-bit LSB executable, x86-64`. **Never push a
+native image to `:latest`** — that tag is the JVM workload's artifact.
 
 ---
 
@@ -182,7 +217,8 @@ an accepted trade for a low-importance demo. If you add one back, be generous
 | `__DR_BASE__` visible in the served HTML | Sentinel mismatch between `vite.config.ts` and `SpaFallbackRoute` | Re-sync the constant |
 | Console `Not found: /api/v2/endpoints/workloads/<id>/` | SvelteKit `base` is `''` in the bundle — assets alone were fixed | Sentinel substitution must cover `/_app` JS, not just the HTML |
 | Blank `/` but a working API | The UI was never copied into `META-INF/resources` before `mvn package` | `scripts/run-local.sh`, or the copy step by hand |
-| `exec format error`, instant crash-loop | arm64-only image | Build multi-arch `linux/amd64,linux/arm64` |
+| `exec format error`, instant crash-loop | arm64-only image | Build multi-arch `linux/amd64,linux/arm64` (JVM), or `--platform linux/amd64` (native) |
+| Native image "looks fine" but the manifest says arm64 | The binary was built amd64 but `docker build` ran on an ARM host | Rebuild the image with `docker buildx build --platform linux/amd64`; verify with the three-way check above |
 | `CrashLoopBackOff`, nginx `/etc/nginx/conf.d is not writable` / `mkdir /var/cache/nginx` denied | Containers run **non-root on a read-only root filesystem**; stock nginx cannot start | Don't add an nginx sidecar — Quarkus (uid 185) serves the UI |
 | Exit **143** ~60s after each start, app logs look clean | Probe config (see above) | Use the verified probe block |
 | Stuck in `launching` | Readiness never passed | `dr workload logs`; check the probe path returns 200 inside the container |
