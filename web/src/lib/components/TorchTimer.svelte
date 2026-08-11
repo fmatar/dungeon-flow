@@ -8,7 +8,7 @@
 		active
 	}: { seconds: number; resetKey: number; active: boolean } = $props();
 
-	let remaining = $state(seconds);
+	let remaining = $state(0);
 
 	$effect(() => {
 		// Read props so the effect re-runs when the timer should restart.
