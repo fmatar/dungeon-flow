@@ -268,5 +268,8 @@ yourself:
 
 ---
 
+Hands-on lab: [`../../docs/lab/LAB.md`](../../docs/lab/LAB.md) — module 8 deploys here, module 9 covers
+the failures this guide documents.
+
 Root docs: [`../../README.md`](../../README.md) · Deployment overview:
 [`../README.md`](../README.md) · UI: [`../../web/README.md`](../../web/README.md)

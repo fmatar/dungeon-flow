@@ -203,4 +203,5 @@ apart.
 
 ---
 
-Root docs: [`../README.md`](../README.md) · Deployment: [`../deploy/README.md`](../deploy/README.md)
+Root docs: [`../README.md`](../README.md) · Deployment: [`../deploy/README.md`](../deploy/README.md) ·
+Hands-on lab: [`../docs/lab/LAB.md`](../docs/lab/LAB.md) (module 3 packages this UI into the backend jar)

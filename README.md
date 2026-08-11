@@ -47,6 +47,7 @@ definition worth reading.
 - [Architecture and design decisions](#architecture-and-design-decisions)
 - [Troubleshooting](#troubleshooting)
 - [Project layout](#project-layout)
+- **[The hands-on lab](docs/lab/LAB.md)** — learn all of the above by building it
 
 **Module documentation:** [`web/`](web/README.md) (the SvelteKit UI) ·
 [`deploy/`](deploy/README.md) (deployment) ·
@@ -531,6 +532,10 @@ The script that has worked live, in order:
 
 For a room full of people playing at once, open `/race` on the projector instead.
 
+> **Want them building rather than watching?** [`docs/lab/LAB.md`](docs/lab/LAB.md) turns this into a
+> 90-minute hands-on lab where the audience goes from clone to deployed container themselves, with a
+> [facilitator guide](docs/lab/FACILITATOR.md) and [slides](docs/lab/slides.md).
+
 ---
 
 ## Architecture and design decisions
@@ -618,6 +623,11 @@ More, specific to deployment: [`deploy/datarobot/README.md`](deploy/datarobot/RE
 ├── web/                         ← SvelteKit UI  → web/README.md
 ├── deploy/                      ← deployment    → deploy/README.md
 │   └── datarobot/               ← Workload API  → deploy/datarobot/README.md
+├── docs/lab/                    ← hands-on lab → docs/lab/LAB.md
+│   ├── PREREQUISITES.md         ← send to participants beforehand
+│   ├── LAB.md                   ← the tutorial, 9 modules
+│   ├── FACILITATOR.md           ← timings, cues, known failures
+│   └── slides.md                ← Marp deck
 ├── scripts/dungeon.sh           ← build · run · push · native · stop
 ├── docker-compose.yaml
 └── specs/                       ← PRD + SRS
