@@ -10,7 +10,10 @@
 #   mvn clean package -DskipTests -Dquarkus.container-image.build=true
 services:
   app:
-    image: ghcr.io/fmatar/dungeon-flow:latest
+    # Overridable so the same compose file can run a native build without clobbering
+    # the JVM :latest tag — `scripts/run-local.sh --native` sets this to the
+    # native-<arch> image it just built.
+    image: ${DUNGEON_IMAGE:-ghcr.io/fmatar/dungeon-flow:latest}
     ports:
       # Single mapping, host side overridable: `mvn quarkus:dev` also wants 8080, and
       # publishing both 8080 and 5173 meant a busy 8080 aborted the whole `up` with

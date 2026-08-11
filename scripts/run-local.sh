@@ -17,6 +17,18 @@
 #   scripts/run-local.sh --stop          stop a previously started stack
 #   scripts/run-local.sh --help
 #
+# Native (GraalVM) builds — a tiny, fast-booting image instead of the JVM one:
+#   scripts/run-local.sh --native                          host arch, ~1 min
+#   scripts/run-local.sh --native --platform linux/amd64   what DataRobot needs
+#
+# Native does NOT cross-compile: the binary targets the build architecture. The
+# build always runs inside a Linux builder container (no local GraalVM needed),
+# so on an ARM Mac plain --native gives you linux/arm64 — perfect for testing
+# the native path locally, but it CANNOT run on DataRobot. For the real artifact
+# add --platform linux/amd64, which forces emulation and is much slower.
+#
+# Native images are tagged native-<arch> so they never clobber the JVM :latest.
+#
 set -euo pipefail
 
 # --- pretty output ----------------------------------------------------------
@@ -48,7 +60,7 @@ COMPOSE_SERVICE=app
 CONTAINER_PORT=8080
 
 # --- args -------------------------------------------------------------------
-HOST_PORT=""; DO_RUN=1; DO_PUSH=0; WITH_TESTS=0; DO_STOP=0
+HOST_PORT=""; DO_RUN=1; DO_PUSH=0; WITH_TESTS=0; DO_STOP=0; DO_NATIVE=0; PLATFORM=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --port) HOST_PORT=${2:-}; [[ -n $HOST_PORT ]] || die "--port needs a value"; shift 2 ;;
@@ -57,6 +69,9 @@ while [[ $# -gt 0 ]]; do
         --no-run) DO_RUN=0; shift ;;
         --with-tests) WITH_TESTS=1; shift ;;
         --stop) DO_STOP=1; shift ;;
+        --native) DO_NATIVE=1; shift ;;
+        --platform) PLATFORM=${2:-}; [[ -n $PLATFORM ]] || die "--platform needs a value"; shift 2 ;;
+        --platform=*) PLATFORM=${1#*=}; shift ;;
         # Print the header comment block: everything after the shebang up to the
         # first non-comment line. Beats a hardcoded line range, which silently
         # rots the moment the header changes length.
@@ -68,6 +83,24 @@ done
 if [[ -n $HOST_PORT && ! $HOST_PORT =~ ^[0-9]+$ ]]; then
     die "--port must be numeric, got '$HOST_PORT'"
 fi
+
+if [[ -n $PLATFORM ]]; then
+    [[ $DO_NATIVE -eq 1 ]] || die "--platform only applies to --native.
+    The JVM image is built multi-arch on push and needs no platform flag."
+    case $PLATFORM in
+        linux/amd64|linux/arm64) ;;
+        *) die "--platform must be linux/amd64 or linux/arm64, got '$PLATFORM'" ;;
+    esac
+fi
+
+# Host architecture in Docker's vocabulary, used to name the image and to warn when
+# a native build will be emulated.
+case "$(uname -m)" in
+    arm64|aarch64) HOST_PLATFORM=linux/arm64 ;;
+    x86_64|amd64)  HOST_PLATFORM=linux/amd64 ;;
+    *)             HOST_PLATFORM="linux/$(uname -m)" ;;
+esac
+: "${PLATFORM:=$HOST_PLATFORM}"
 
 # ===========================================================================
 # --stop: tear down and exit
@@ -196,11 +229,40 @@ else
     step "Building the image (skipping tests)"
     MVN_ARGS+=(-DskipTests)
 fi
+
+NATIVE_TAG=""
+if [[ $DO_NATIVE -eq 1 ]]; then
+    # Tagged per-arch so a native build never overwrites the JVM :latest that
+    # docker-compose and the deployed workload spec both reference by default.
+    NATIVE_TAG="native-${PLATFORM##*/}"
+    # -DskipITs because the `native` profile flips skipITs to false; there are no
+    # *IT classes today, so leave that switch to a deliberate choice.
+    MVN_ARGS+=(-Dnative -DskipITs
+               -Dquarkus.native.container-build=true
+               -Dquarkus.container-image.tag="$NATIVE_TAG")
+    info "native build inside a Linux builder container (no local GraalVM needed)"
+    info "target: $PLATFORM  ->  image tag :$NATIVE_TAG"
+    if [[ $PLATFORM != "$HOST_PLATFORM" ]]; then
+        # GraalVM does not cross-compile; the only way to get a foreign-arch binary
+        # is to emulate the whole builder container.
+        MVN_ARGS+=(-Dquarkus.native.container-runtime-options=--platform="$PLATFORM")
+        warn "$PLATFORM != host $HOST_PLATFORM, so native-image runs EMULATED."
+        warn "Expect many minutes, and an OOM here means the builder needs more"
+        warn "memory: add -Dquarkus.native.native-image-xmx=6g (and raise Docker's RAM)."
+    fi
+fi
+
 if [[ $DO_PUSH -eq 1 ]]; then
-    info "push enabled: multi-arch linux/amd64,linux/arm64 -> ghcr.io"
-    info "${DIM}amd64 is required by the DataRobot Workload API; arm64 keeps it native on Apple Silicon${RST}"
-    MVN_ARGS+=(-Dquarkus.container-image.push=true
-               -Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64)
+    MVN_ARGS+=(-Dquarkus.container-image.push=true)
+    if [[ $DO_NATIVE -eq 1 ]]; then
+        # A native image contains one architecture's binary; there is no multi-arch
+        # manifest to assemble the way the JVM image gets one.
+        info "push enabled: single-arch $PLATFORM -> ghcr.io :$NATIVE_TAG"
+    else
+        info "push enabled: multi-arch linux/amd64,linux/arm64 -> ghcr.io"
+        info "${DIM}amd64 is required by the DataRobot Workload API; arm64 keeps it native on Apple Silicon${RST}"
+        MVN_ARGS+=(-Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64)
+    fi
 fi
 mvn "${MVN_ARGS[@]}"
 
@@ -210,6 +272,7 @@ IMG_REG=$(prop 'quarkus\.container-image\.registry')
 IMG_GRP=$(prop 'quarkus\.container-image\.group')
 IMG_NAME=$(prop 'quarkus\.container-image\.name')
 IMG_TAG=$(prop 'quarkus\.container-image\.tag')
+[[ -n $NATIVE_TAG ]] && IMG_TAG=$NATIVE_TAG
 IMAGE="${IMG_REG:+$IMG_REG/}${IMG_GRP:+$IMG_GRP/}${IMG_NAME:-dungeon-flow}:${IMG_TAG:-latest}"
 
 if [[ $DO_PUSH -eq 1 ]]; then
@@ -224,7 +287,11 @@ fi
 
 if [[ $DO_RUN -eq 0 ]]; then
     step "Done (--no-run)"
-    info "start it later with: docker compose up"
+    if [[ -n $NATIVE_TAG ]]; then
+        info "start it later with: DUNGEON_IMAGE=$IMAGE docker compose up"
+    else
+        info "start it later with: docker compose up"
+    fi
     exit 0
 fi
 
@@ -265,6 +332,14 @@ fi
 # ===========================================================================
 step "Starting the container"
 export DUNGEON_HOST_PORT=$HOST_PORT
+# Tell compose which image to run: the JVM :latest by default, or the native-<arch>
+# tag just built. Compose defaults this if unset, so `--stop` needs nothing.
+export DUNGEON_IMAGE=$IMAGE
+info "image: $IMAGE"
+if [[ $DO_NATIVE -eq 1 && $PLATFORM != "$HOST_PLATFORM" ]]; then
+    warn "this is a $PLATFORM image on a $HOST_PLATFORM host - Docker will emulate it,"
+    warn "so local timings will NOT reflect how it performs on DataRobot."
+fi
 docker compose down --remove-orphans >/dev/null 2>&1 || true
 docker compose up -d
 
@@ -342,6 +417,24 @@ elif [[ -n $ROOM ]]; then
     info "engine is live - instance sits at $ROOM (status $STATUS); the lock is random by design"
 else
     die "could not read the instance state back. The API is up but not behaving."
+fi
+
+# ===========================================================================
+# 7. Measured footprint - the numbers worth quoting, not estimates
+# ===========================================================================
+step "Measured footprint"
+CID=$(docker compose ps -q "$COMPOSE_SERVICE" 2>/dev/null | head -1)
+STARTUP=$(docker compose logs "$COMPOSE_SERVICE" 2>/dev/null \
+    | sed -n 's/.*started in \([0-9.]*\)s.*/\1/p' | tail -1)
+MEM=$(docker stats --no-stream --format '{{.MemUsage}}' "$CID" 2>/dev/null | awk '{print $1}')
+IMG_SIZE=$(docker images --format '{{.Size}}' "$IMAGE" 2>/dev/null | head -1)
+MODE=$([[ $DO_NATIVE -eq 1 ]] && echo "native ($PLATFORM)" || echo "JVM")
+printf '    %-14s %s\n' "mode:"    "$MODE"
+printf '    %-14s %s\n' "image:"   "${IMG_SIZE:-?}"
+printf '    %-14s %s\n' "startup:" "${STARTUP:-?}s"
+printf '    %-14s %s\n' "memory:"  "${MEM:-?}"
+if [[ $DO_NATIVE -eq 0 ]]; then
+    info "${DIM}compare against: scripts/run-local.sh --native${RST}"
 fi
 
 # ===========================================================================

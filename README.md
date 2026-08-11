@@ -135,7 +135,28 @@ scripts/run-local.sh
 ```
 
 `--port 9000` pins the port, `--no-run` builds only, `--push` publishes multi-arch to GHCR,
-`--with-tests` runs the suite, `--stop` tears it down, `--help` explains itself.
+`--with-tests` runs the suite, `--stop` tears it down, `--help` explains itself. Every run ends with
+the measured image size, startup time and RSS.
+
+**Native (GraalVM) builds** — same script, `--native`:
+
+```bash
+scripts/run-local.sh --native
+```
+
+Measured on an M-series Mac (arm64, like for like):
+
+| | JVM | Native |
+|---|---|---|
+| Image | 661 MB | **253 MB** |
+| Startup | 2.018s | **0.023s** |
+| RSS | 176.7 MiB | **12.0 MiB** |
+
+Native does **not** cross-compile — the binary targets the build architecture, and the build always
+runs inside a Linux builder container so no local GraalVM is needed. On an ARM Mac plain `--native`
+produces `linux/arm64`, which is ideal for testing the native path but **cannot run on DataRobot**.
+For the deployable artifact add `--platform linux/amd64`; that forces emulation and is much slower.
+Native images are tagged `native-<arch>` so they never clobber the JVM `:latest`.
 
 <details>
 <summary><strong>The manual steps</strong> (what the script automates)</summary>
