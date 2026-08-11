@@ -52,6 +52,12 @@ definition worth reading.
 [`deploy/`](deploy/README.md) (deployment) ·
 [`deploy/datarobot/`](deploy/datarobot/README.md) (DataRobot Workload API operator guide)
 
+> 🧪 **Want to learn this by building it?** [`docs/lab/LAB.md`](docs/lab/LAB.md) is a 90-minute
+> hands-on lab that goes from a fresh clone to a deployed container — dev mode, packaging the UI into
+> the jar, JVM and native images, publishing to your own registry, and deploying. It also covers the
+> five things that broke along the way. Designed to be run with an audience
+> ([facilitator guide](docs/lab/FACILITATOR.md), [slides](docs/lab/slides.md)), but it works alone.
+
 ---
 
 ## Quick start
