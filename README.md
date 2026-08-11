@@ -93,20 +93,71 @@ See [For operators](#for-operators), then [`deploy/README.md`](deploy/README.md)
 
 ### Prerequisites
 
-| Tool | Version | Why |
-|---|---|---|
-| **JDK** | **25** | `maven.compiler.release=25`. An older JDK fails with `release version 25 not supported`, which reads like a Maven bug. |
-| Maven | 3.9+ | Or `./mvnw` if you add the wrapper. |
-| Node | 20+ | For the UI. |
-| pnpm / npm | either | See [package manager](#a-note-on-package-managers). |
-| Docker | any recent | Only for container builds, not for dev mode. |
-
-Getting JDK 25 (any of these):
+On macOS, [Homebrew](https://brew.sh) covers everything. If you don't have it:
 
 ```bash
-sdk install java 25.0.4-tem     # SDKMAN
-brew install openjdk@25          # Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
+
+Then, in one line:
+
+```bash
+brew install --cask graalvm-jdk@25 docker-desktop && brew install maven node pnpm
+```
+
+| Tool | Install | Why this one |
+|---|---|---|
+| **GraalVM 25** | `brew install --cask graalvm-jdk@25` | The project compiles with `maven.compiler.release=25`, and GraalVM is a full JDK — so it runs the JVM build *and* unlocks native builds. Any JDK 25 works if you don't care about native. |
+| **Docker Desktop** | `brew install --cask docker-desktop` | Container builds and Compose. Not needed for dev mode. |
+| **Maven** | `brew install maven` | 3.9+. |
+| **Node 20+** | `brew install node` | Builds the UI. **Required even for a backend-only container build**, because the UI is compiled into the jar. |
+| **pnpm** | `brew install pnpm` | Optional — `npm` ships with Node and works identically. See [the note on package managers](#a-note-on-package-managers). |
+| **jq** | `brew install jq` | Optional, only for the pretty-printed [curl examples](#with-curl). |
+
+**Point `JAVA_HOME` at GraalVM.** Homebrew casks install JDKs where macOS can find them, so:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 25)
+```
+
+Add that to your `~/.zshrc` to make it stick. You can skip it if you like:
+[`scripts/dungeon.sh`](scripts/dungeon.sh) locates a JDK 25 itself (checking `JAVA_HOME`,
+`/usr/libexec/java_home`, then SDKMAN) and tells you what it picked.
+
+Verify the toolchain:
+
+```bash
+java -version && mvn -v && node -v && docker info | head -1
+```
+
+> **On GraalVM and native builds.** Having GraalVM locally means `mvn package -Dnative` works without
+> a builder container — but on macOS that produces a **macOS** binary, which is useless in a Linux
+> container. That's why [`scripts/dungeon.sh --native`](#jvm-or-native) always compiles inside a Linux
+> builder image. Local GraalVM is still worth having: it's your JDK, and it makes
+> `quarkus:dev`-adjacent native experiments possible.
+
+> `brew install --cask graalvm-jdk@25` installs **Oracle GraalVM** (free for development and
+> production under Oracle's
+> [GFTC terms](https://www.oracle.com/downloads/licenses/graal-free-license.html)). GraalVM's own tap
+> is an alternative (`brew tap graalvm/tap && brew install --cask graalvm-jdk25`), and any JDK 25 is
+> fine if you'd rather let the script's container builder handle native.
+
+### Your IDE
+
+Any editor works. The repo ships IntelliJ IDEA configuration in [`.idea/`](.idea/) —
+**Checkstyle-IDEA** and **google-java-format** settings — so if you use IntelliJ you inherit the
+project's formatting with no setup:
+
+```bash
+brew install --cask intellij-idea-ce     # or: brew install --cask visual-studio-code
+```
+
+For VS Code, the [Extension Pack for
+Java](https://marketplace.visualstudio.com/items?itemName=vscjava.vscode-java-pack) plus
+[Svelte for VS Code](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode)
+covers both halves of the codebase.
+
+Nothing in the build depends on an IDE — `mvn`, `pnpm` and `scripts/dungeon.sh` are the whole story.
 
 ### Dev mode: two processes, both hot-reloading
 
