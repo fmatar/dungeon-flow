@@ -127,6 +127,19 @@ constraint C-3 taken literally. Client-side routes like `/race` are rewritten to
 
 ### 1. Building the image locally
 
+**The easy way** — one command that does every step below, picks a free host port, waits for the app
+to come up and plays a full game to prove the workflow engine really runs:
+
+```bash
+scripts/run-local.sh
+```
+
+`--port 9000` pins the port, `--no-run` builds only, `--push` publishes multi-arch to GHCR,
+`--with-tests` runs the suite, `--stop` tears it down, `--help` explains itself.
+
+<details>
+<summary><strong>The manual steps</strong> (what the script automates)</summary>
+
 The UI build is **not** committed, so it has to be produced and copied into the jar's static
 resources before packaging:
 
@@ -135,12 +148,18 @@ npm --prefix web run build
 ```
 
 ```bash
-cp -R web/build/. src/main/resources/META-INF/resources/
+mkdir -p src/main/resources/META-INF/resources && cp -R web/build/. src/main/resources/META-INF/resources/
 ```
 
 ```bash
 mvn clean package -DskipTests -Dquarkus.container-image.build=true
 ```
+
+Skipping the copy is the failure mode to watch for: you get a working API and a blank `/`, with no
+error explaining why. It also needs **JDK 25** (`maven.compiler.release=25`) — an older JDK fails
+with `release version 25 not supported`, which reads like a Maven bug rather than a JDK mismatch.
+
+</details>
 
 *(Quarkus uses the [`src/main/docker/Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image
 coordinates come from `quarkus.container-image.*` in

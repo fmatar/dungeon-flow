@@ -12,6 +12,9 @@ services:
   app:
     image: ghcr.io/fmatar/dungeon-flow:latest
     ports:
-      - "8080:8080"
-      - "5173:8080" # keep the port local dev muscle-memory expects
+      # Single mapping, host side overridable: `mvn quarkus:dev` also wants 8080, and
+      # publishing both 8080 and 5173 meant a busy 8080 aborted the whole `up` with
+      # "address already in use" before any container started.
+      #   DUNGEON_HOST_PORT=5173 docker compose up
+      - "${DUNGEON_HOST_PORT:-8080}:8080"
     restart: unless-stopped
