@@ -1,0 +1,88 @@
+# Dungeon Flow on the DataRobot Workload API
+# ---------------------------------------------------------------------------
+# Deploy with:  dr workload create --spec-file deploy/datarobot/workload.yaml
+#
+# Topology: ONE container group holding BOTH containers, so they share a network
+# namespace and nginx can reach Quarkus on 127.0.0.1 - the same shape as Docker
+# Compose, minus the Compose DNS name.
+#
+#   web (nginx, primary)  :8000  --/api/*--> 127.0.0.1:8080  api (quarkus)
+#
+# Three platform constraints shape this file:
+#   1. Primary container MUST declare a port and it MUST be >= 1024, so nginx
+#      listens on 8000 rather than 80 (NGINX_PORT below).
+#   2. Non-primary containers MUST omit `port` - `api` still listens on 8080
+#      inside the group, it just isn't the publicly exposed port.
+#   3. replicaCount MUST stay 1: GameStore is an in-memory ConcurrentHashMap
+#      with no persistence, so a second replica would 404 sessions that were
+#      started on the other pod. Do not enable autoscaling.
+name: dungeon-flow
+importance: low
+
+artifact:
+  name: dungeon-flow-artifact
+  spec:
+    type: service
+    containerGroups:
+      - name: default
+        containers:
+          # --- the UI + reverse proxy (publicly exposed) --------------------
+          - name: web
+            imageUri: ghcr.io/fmatar/dungeon-flow-ui:latest
+            primary: true
+            port: 8000
+            environmentVars:
+              # Override the image's Compose-oriented defaults. BACKEND_HOST is
+              # the important one: `backend` (Compose DNS) does not exist here.
+              - name: NGINX_PORT
+                value: "8000"
+              - name: BACKEND_HOST
+                value: "127.0.0.1"
+              - name: BACKEND_PORT
+                value: "8080"
+            readinessProbe:
+              path: /
+              port: 8000
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            livenessProbe:
+              path: /
+              port: 8000
+              initialDelaySeconds: 20
+              periodSeconds: 20
+
+          # --- the Quarkus Flow engine (internal only) ----------------------
+          - name: api
+            imageUri: ghcr.io/fmatar/dungeon-flow:latest
+            primary: false
+            # No `port` key: the platform rejects it on non-primary containers.
+            environmentVars:
+              - name: QUARKUS_HTTP_PORT
+                value: "8080"
+            # There is no quarkus-smallrye-health on the classpath, so there is
+            # no /q/health. GET /dungeon (list sessions) returns 200 with a JSON
+            # array and is the cheapest honest readiness signal we have.
+            readinessProbe:
+              path: /dungeon
+              port: 8080
+              initialDelaySeconds: 10
+              periodSeconds: 10
+            livenessProbe:
+              path: /dungeon
+              port: 8080
+              initialDelaySeconds: 30
+              periodSeconds: 20
+
+runtime:
+  containerGroups:
+    - name: default
+      replicaCount: 1 # see constraint 3 above - do NOT raise
+      containers:
+        - name: web
+          resourceAllocation:
+            cpu: 0.5
+            memory: "256MB"
+        - name: api
+          resourceAllocation:
+            cpu: 1
+            memory: "1GB"
