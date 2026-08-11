@@ -1,171 +1,290 @@
 # Dungeon Flow
 
-A text-adventure dungeon whose **map *is* a workflow**. Rooms are workflow states, doors are
-transitions, and every player move is a CloudEvent. Powered by
-[**Quarkus Flow**](https://docs.quarkiverse.io/quarkus-flow/dev/index.html) (the CNCF Serverless
-Workflow engine embedded in Quarkus) — not SonataFlow.
+**A text-adventure dungeon whose map *is* a running workflow.** Rooms are workflow states, doors are
+transitions, and every player move is a CloudEvent. Built on
+[Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/index.html) — the
+[CNCF Serverless Workflow](https://serverlessworkflow.io/) engine embedded in Quarkus.
 
-This is the **Crawl** phase: a 5-room dungeon playable entirely over HTTP (curl), with the workflow
-diagram viewable in the Quarkus Dev UI as a projector view. See `specs/PRD_Dungeon_Flow.md` and
-`specs/SRS_Dungeon_Flow.md` for the full product/spec.
-
-> **Why this teaches workflows:** every hard-to-explain primitive is a game mechanic you *play* —
-> an event wait (the fork), a data switch (left/right), a multi-event join (the two levers), a
-> bounded retry with compensation (the trap), and an event timeout (the torch).
-
-## The map
+Workflow-engine concepts are abstract and famously hard to teach. Order-processing demos don't land.
+So every primitive here is a **game mechanic you play**: an event wait is a fork in a corridor, a
+multi-event join is two levers, a bounded retry is a jammed lock, an event timeout is a burning
+torch. You watch the engine drive the game, then open one file and see exactly which construct
+produced what you just felt.
 
 ```
- Entrance ─▶ Fork ──(left)──▶ Lever Room ──(pull A & B)──▶ Trap Corridor ──(pick lock)──▶ Treasure Room ✦END
+ Entrance ─▶ Fork ──(left)──▶ Lever Room ──(pull A & B)──▶ Trap Corridor ──(pick lock)──▶ Treasure ✦END
               │  \─(right)────────────────────────────────▶ Trap Corridor
               │  \─(unknown, or torch times out)──────────▶ respawn
               ▲                                                    │
               └───────────────── respawn on retry exhaustion ──────┘
 ```
 
-| Room | Workflow primitive | Requirement |
-|------|--------------------|-------------|
-| Fork | `listen` (event wait) + `switch` (data-based routing) + `timeout` | REQ-FUNC-002, 005 |
-| Lever Room | `listen … all(A, B)` (multi-event **join**, any order) | REQ-FUNC-003 |
-| Trap Corridor | bounded **retry** loop + **respawn** compensation | REQ-FUNC-004 |
-| Treasure Room | terminal state (`end`) with `victory: true` | REQ-FUNC-006 |
+| Room | Workflow primitive | What you experience |
+|---|---|---|
+| **Fork** | `listen` (event wait) + `switch` (data routing) + `timeout` | The game pauses, waiting for *you*. Dawdle and your torch dies. |
+| **Lever Room** | `listen … all(A, B)` — multi-event **join** | Pull one lever: nothing. Pull both, any order: the gate opens. |
+| **Trap Corridor** | bounded **retry** + **compensation** | The lock jams at random. Three failures and a trap flings you back. |
+| **Treasure Room** | terminal state (`end`) | `victory: true`, instance `COMPLETED`. |
 
-All of this lives in one file — [`DungeonWorkflow.java`](src/main/java/org/acme/dungeon/DungeonWorkflow.java).
-The Java beans it calls only observe (`GameStore`) or roll dice (`LockService`); **they never decide
-where the player goes next** (SRS constraint C-1).
+The entire map lives in one file —
+**[`DungeonWorkflow.java`](src/main/java/org/acme/dungeon/DungeonWorkflow.java)**. The Java beans it
+calls only *observe* ([`GameStore`](src/main/java/org/acme/dungeon/GameStore.java)) or *roll dice*
+([`LockService`](src/main/java/org/acme/dungeon/LockService.java)). **They never decide where the
+player goes next** — that is the project's central constraint, and it's what makes the workflow
+definition worth reading.
 
-## Run it
+---
 
-Prerequisites: **Java 25** (the project compiles with `maven.compiler.release=25`) and Maven (or the
-`mvnw` wrapper). First run downloads Quarkus 3.38.1 + quarkus-flow 0.15.1 from Maven Central.
+## Contents
+
+- [Quick start](#quick-start) — pick your path in 30 seconds
+- [For developers](#for-developers) — dev mode, hot reload, tests
+- [Playing it](#playing-it) — browser and curl
+- [HTTP API](#http-api)
+- [For operators](#for-operators) — build, containerize, deploy
+- [Publishing to your own registry](#publishing-to-your-own-registry) — fork-friendly
+- [Running a demo](#running-a-demo)
+- [Architecture and design decisions](#architecture-and-design-decisions)
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+
+**Module documentation:** [`web/`](web/README.md) (the SvelteKit UI) ·
+[`deploy/`](deploy/README.md) (deployment) ·
+[`deploy/datarobot/`](deploy/datarobot/README.md) (DataRobot Workload API operator guide)
+
+---
+
+## Quick start
+
+Three ways in, depending on what you want.
+
+### I want to see it run, now
 
 ```bash
-mvn quarkus:dev        # hot-reload dev mode on http://localhost:8080
+./scripts/dungeon.sh
 ```
 
-Press `d` in the dev console (or open http://localhost:8080/q/dev-ui) → **Quarkus Flow → Workflows**
-to watch the diagram while you play — this is the projector view for demos (PRD-FEAT-09).
+One command: builds the UI, builds the container, picks a free port, waits for health, and **plays a
+full game to prove the workflow engine actually runs**. Ends with measured image size, startup time
+and memory. Then open the URL it prints (usually <http://localhost:8080>).
 
-## Play it (curl)
+Needs Docker, Node 20+, Maven and **JDK 25**. The script checks all of that up front and tells you
+exactly what's missing.
+
+### I want to develop on it
+
+Two processes, both hot-reloading — see [For developers](#for-developers):
+
+```bash
+mvn quarkus:dev
+```
+
+```bash
+pnpm --dir web dev
+```
+
+### I want to deploy it
+
+See [For operators](#for-operators), then [`deploy/README.md`](deploy/README.md).
+
+---
+
+## For developers
+
+### Prerequisites
+
+| Tool | Version | Why |
+|---|---|---|
+| **JDK** | **25** | `maven.compiler.release=25`. An older JDK fails with `release version 25 not supported`, which reads like a Maven bug. |
+| Maven | 3.9+ | Or `./mvnw` if you add the wrapper. |
+| Node | 20+ | For the UI. |
+| pnpm / npm | either | See [package manager](#a-note-on-package-managers). |
+| Docker | any recent | Only for container builds, not for dev mode. |
+
+Getting JDK 25 (any of these):
+
+```bash
+sdk install java 25.0.4-tem     # SDKMAN
+brew install openjdk@25          # Homebrew
+```
+
+### Dev mode: two processes, both hot-reloading
+
+This is the setup to develop in. The backend and the UI reload independently, and you get the
+**workflow diagram** — which the container images do not have.
+
+**Terminal 1 — the Quarkus backend:**
+
+```bash
+mvn quarkus:dev
+```
+
+Serves the API on <http://localhost:8080/api>. Java changes recompile on the next request; edits to
+[`DungeonWorkflow.java`](src/main/java/org/acme/dungeon/DungeonWorkflow.java) take effect on the next
+game you start.
+
+**Terminal 2 — the SvelteKit UI:**
+
+```bash
+pnpm --dir web install && pnpm --dir web dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api/*` to the backend on `:8080`, so the browser stays
+same-origin — no CORS, and SSE streams work. The proxy deliberately does **not** strip the `/api`
+prefix, because the backend serves its endpoints under `/api` itself.
+
+**The workflow diagram** (the reason to use dev mode): press `d` in the Quarkus dev console, or open
+<http://localhost:8080/q/dev-ui> → **Quarkus Flow → Workflows**. Put it on a projector and watch the
+token move as you play. This is the demo centrepiece and it exists **only in dev mode** — the
+production images have no Dev UI.
+
+### Tests
+
+```bash
+mvn test
+```
+
+16 tests, and they are the best description of the intended behaviour:
+
+- **[`DungeonWorkflowTest`](src/test/java/org/acme/dungeon/DungeonWorkflowTest.java)** drives the
+  engine directly with no HTTP, asserting each acceptance criterion: left/right routing; the
+  two-lever join in **both orders** *and* that one lever alone does **not** open the gate; the trap
+  retrying **exactly** three times before respawning; the torch timeout firing without faulting the
+  instance; victory; and 10 concurrent instances staying isolated.
+- **[`DungeonResourceTest`](src/test/java/org/acme/dungeon/DungeonResourceTest.java)** replays the
+  whole player journey over the real REST API.
+
+The test profile makes the game fast and deterministic — the torch burns out in 2s instead of 60s,
+and the lock can be forced to always succeed or always jam.
+
+### A note on package managers
+
+`package-lock.json` is the committed lockfile and the container build uses `npm ci`. **`pnpm` works
+fine for local development** (`pnpm --dir web dev`) and is what several of us use day to day.
+
+`pnpm-lock.yaml` is gitignored on purpose: carrying two lockfiles for one dependency set caused real
+drift here. If you'd rather standardize on pnpm, remove that line from [`.gitignore`](.gitignore),
+commit the pnpm lockfile, delete `package-lock.json`, and switch the install step in
+[`scripts/dungeon.sh`](scripts/dungeon.sh) — it's a deliberate one-way door, not an accident.
+
+---
+
+## Playing it
+
+### In the browser
+
+The UI's job isn't "click instead of curl" — it makes the invisible primitives **visible**: a
+draining torch ring for the timeout, two lit levers for the join, an animated retry counter for the
+trap, and a live spotlight naming the construct currently firing. Details in
+[`web/README.md`](web/README.md).
+
+- **`/`** — play, with the teaching panel beside it
+- **`/race`** — facilitator view: every active instance racing across the five rooms
+
+### With curl
 
 ```bash
 # 1) Start a game — returns your instance id and the entrance narrative
 curl -s -XPOST http://localhost:8080/api/dungeon | jq
-#   { "instanceId": "01J…", "entrance": { "room": "ENTRANCE", … } }
 ID=<paste instanceId>
 
 # 2) At the fork, choose a path (don't dawdle — the torch is burning)
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/choice \
      -H 'Content-Type: application/json' -d '{"direction":"left"}'
 
-# 3a) LEFT — the Lever Room: pull BOTH levers, in any order (the join)
+# 3) LEFT — the Lever Room. Pull ONE lever and inspect: nothing has moved (the join is holding)
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-a
+curl -s http://localhost:8080/api/dungeon/$ID | jq '.view.room, .status'
+
+# ...now the second lever. The gate opens and the Trap Corridor picks the lock by itself
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-b
 
-# 3b) …then the Trap Corridor picks the lock automatically (retries on a jam)
-
-# 4) Check where you are at any time
+# 4) Where am I?
 curl -s http://localhost:8080/api/dungeon/$ID | jq
 
-# List every active session (facilitator race view) / clean one up
+# Watch transitions live (SSE), including server-side retries and respawns
+curl -N http://localhost:8080/api/dungeon/$ID/stream
+
+# Every active session (facilitator view) / clean one up
 curl -s http://localhost:8080/api/dungeon | jq
 curl -s -XDELETE http://localhost:8080/api/dungeon/$ID
 ```
 
-**Choosing `right`** skips the levers and goes straight to the Trap Corridor.
-**Idling** at the fork past the torch timeout (60s in prod, 2s in tests) respawns you at the
-entrance. **A jammed lock** that never opens respawns you at the fork after 3 attempts.
+Things worth trying deliberately: choose **`right`** to skip the levers; **idle** at the fork past
+the torch timeout to be respawned; send an **unknown direction** to watch the `switch` fall through
+to its default.
+
+### Tuning the game
+
+In [`application.properties`](src/main/resources/application.properties) — game *balance*, not game
+*rules*, which live in the workflow:
+
+| Property | Default | Effect |
+|---|---|---|
+| `dungeon.lock.success-probability` | `0.5` | Per-attempt chance the lock opens |
+| `dungeon.lock.mode` | `RANDOM` | `RANDOM` \| `ALWAYS_SUCCEED` \| `ALWAYS_JAM` — force outcomes for demos |
+| `dungeon.trap.max-attempts` | `3` | Retries before the respawn compensation |
+| `dungeon.fork.torch-timeout` | `PT60S` | Idle time at the fork before respawn (ISO-8601) |
+
+---
 
 ## HTTP API
 
-| Method & path | Purpose | Req |
-|---|---|---|
-| `POST /api/dungeon` | Start a session; returns `instanceId` + entrance view | REQ-FUNC-001 |
-| `POST /api/dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice | REQ-FUNC-002 |
-| `POST /api/dungeon/{id}/lever-a`, `POST /api/dungeon/{id}/lever-b` | Pull a lever | REQ-FUNC-003 |
-| `GET /api/dungeon/{id}` | Inspect current room/narrative/status | REQ-FUNC-007 |
-| `GET /api/dungeon/{id}/stream` | SSE stream of room transitions + lock attempts (drives the web UI) | REQ-FUNC-007 |
-| `GET /api/dungeon` | List all sessions | REQ-FUNC-008/012 |
-| `DELETE /api/dungeon/{id}` | Cancel + forget a session | REQ-FUNC-012 |
+All endpoints are under `/api` (`quarkus.rest.path=/api`), leaving `/` free for the UI.
 
-Player moves become CloudEvents published **directly into the engine's in-process event broker**,
-correlated to your instance via the `dungeoninstance` extension attribute. There is **no Kafka and
-no message broker** — the game is a single self-contained process (SRS constraint C-3).
+| Method & path | Purpose |
+|---|---|
+| `POST /api/dungeon` | Start a session → `instanceId` + entrance view + torch timeout |
+| `POST /api/dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice |
+| `POST /api/dungeon/{id}/lever-a` · `POST /api/dungeon/{id}/lever-b` | Pull a lever |
+| `GET /api/dungeon/{id}` | Inspect current room, narrative and status |
+| `GET /api/dungeon/{id}/stream` | **SSE** stream of room transitions + lock attempts |
+| `GET /api/dungeon` | List all sessions |
+| `DELETE /api/dungeon/{id}` | Cancel and forget a session |
 
-## Test it
+Player moves become CloudEvents published **directly into the engine's in-process broker**,
+correlated to your instance by the `dungeoninstance` extension attribute. There is **no Kafka and no
+message broker** — the whole game is one self-contained process.
 
-```bash
-mvn test
-```
+---
 
-- [`DungeonWorkflowTest`](src/test/java/org/acme/dungeon/DungeonWorkflowTest.java) drives the engine
-  directly (no HTTP) and asserts each REQ-FUNC acceptance criterion: start, left/right routing, the
-  two-lever join (both orders, and that one lever alone does **not** open the gate), trap retry
-  (exactly 3 attempts) → respawn, torch timeout → respawn without faulting, victory, and 10
-  concurrent isolated instances.
-- [`DungeonResourceTest`](src/test/java/org/acme/dungeon/DungeonResourceTest.java) runs the full
-  PRD-CUJ-01 journey over the real REST API.
+## For operators
 
-## Demo script (PRD-FEAT-10)
+The game ships as **one image**: Quarkus serves the SvelteKit build at `/` and the API under `/api`.
+No nginx sidecar, no second container.
 
-1. `mvn quarkus:dev`, open the Dev UI diagram on the projector.
-2. Start a game; narrate the token sitting at the **fork** (an event wait).
-3. Send `left`; watch it move to the **Lever Room**. Pull only lever A — nothing happens (the
-   **join** is holding). Pull B — the gate opens.
-4. In the **Trap Corridor**, set `dungeon.lock.mode=ALWAYS_JAM` (or just get unlucky) to show the
-   **retry** loop and the **respawn** back to the fork.
-5. Start a fresh game and simply wait 60s to show the **torch timeout** firing on its own.
-6. Open `DungeonWorkflow.java` and point at the exact `listen` / `switch` / `all(...)` / retry loop
-   that produced each behaviour.
+> **The one thing to know before building by hand:** the UI build is *not* committed. It must be
+> produced and copied into `src/main/resources/META-INF/resources/` before Maven packages the jar.
+> Forget it and you get a working API behind a **blank page, with no error explaining why**.
+> [`scripts/dungeon.sh`](scripts/dungeon.sh) exists so that cannot happen — prefer it over manual
+> steps.
 
-## Containerization & Docker Compose (REQ-FUNC-009 / PRD-FEAT-08)
+### `scripts/dungeon.sh`
 
-The game ships as **one image**. Quarkus serves the SvelteKit build at `/` and the game API under
-`/api` (`quarkus.rest.path=/api`), so there is no nginx sidecar and no second container — SRS
-constraint C-3 taken literally. Client-side routes like `/race` are rewritten to `index.html` by
-[`SpaFallbackRoute`](src/main/java/org/acme/dungeon/SpaFallbackRoute.java).
+One entry point for every container workflow. It preflights your toolchain, picks a JDK, builds the
+UI, stages it, builds the image, runs it, waits for health, plays a real game, and reports measured
+numbers.
 
-### 1. Building the image locally
+| Flag | Effect |
+|---|---|
+| *(none)* | Build the JVM image and run it on a free port |
+| `--native` | Build a **GraalVM native** image instead (see below) |
+| `--platform linux/amd64` | Target architecture for `--native` |
+| `--push` | Also publish to your registry |
+| `--no-run` | Build only |
+| `--with-tests` | Run the Maven suite as part of the build |
+| `--port 9000` | Pin the host port instead of auto-picking |
+| `--stop` | Tear down a running stack |
+| `--help` | Print usage |
 
-**The easy way** — one command that does every step below, picks a free host port, waits for the app
-to come up and plays a full game to prove the workflow engine really runs:
-
-```bash
-scripts/run-local.sh
-```
-
-`--port 9000` pins the port, `--no-run` builds only, `--push` publishes multi-arch to GHCR,
-`--with-tests` runs the suite, `--stop` tears it down, `--help` explains itself. Every run ends with
-the measured image size, startup time and RSS.
-
-**Native (GraalVM) builds** — same script, `--native`:
-
-```bash
-scripts/run-local.sh --native
-```
-
-Measured on an M-series Mac (arm64, like for like):
-
-| | JVM | Native |
-|---|---|---|
-| Image | 661 MB | **253 MB** |
-| Startup | 2.018s | **0.023s** |
-| RSS | 176.7 MiB | **12.0 MiB** |
-
-Native does **not** cross-compile — the binary targets the build architecture, and the build always
-runs inside a Linux builder container so no local GraalVM is needed. On an ARM Mac plain `--native`
-produces `linux/arm64`, which is ideal for testing the native path but **cannot run on DataRobot**.
-For the deployable artifact add `--platform linux/amd64`; that forces emulation and is much slower.
-Native images are tagged `native-<arch>` so they never clobber the JVM `:latest`.
+Run it however you like — `./scripts/dungeon.sh`, `bash scripts/dungeon.sh`, or `sh
+scripts/dungeon.sh`; it re-execs itself under bash when needed.
 
 <details>
-<summary><strong>The manual steps</strong> (what the script automates)</summary>
-
-The UI build is **not** committed, so it has to be produced and copied into the jar's static
-resources before packaging:
+<summary><strong>The manual equivalent</strong>, if you need to drive the steps yourself</summary>
 
 ```bash
-npm --prefix web run build
+pnpm --dir web build
 ```
 
 ```bash
@@ -176,130 +295,290 @@ mkdir -p src/main/resources/META-INF/resources && cp -R web/build/. src/main/res
 mvn clean package -DskipTests -Dquarkus.container-image.build=true
 ```
 
-Skipping the copy is the failure mode to watch for: you get a working API and a blank `/`, with no
-error explaining why. It also needs **JDK 25** (`maven.compiler.release=25`) — an older JDK fails
-with `release version 25 not supported`, which reads like a Maven bug rather than a JDK mismatch.
+Quarkus uses the [`Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image coordinates come
+from `quarkus.container-image.*` in
+[`application.properties`](src/main/resources/application.properties). `build` and `push` are
+deliberately **not** set there, so a plain `mvn package` never touches Docker or a registry.
 
 </details>
 
-*(Quarkus uses the [`src/main/docker/Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image
-coordinates come from `quarkus.container-image.*` in
-[`application.properties`](src/main/resources/application.properties); `build`/`push` are
-deliberately **not** set there, so a plain `mvn package` never touches Docker or a registry.)*
+### JVM or native?
 
----
+```bash
+./scripts/dungeon.sh --native
+```
 
-### 2. Running locally with Docker Compose
+Measured on an M-series Mac, same architecture both sides:
+
+| | JVM | Native | |
+|---|---|---|---|
+| Image | 661 MB | **253 MB** | 2.6× smaller |
+| Startup | 2.018s | **0.023s** | ~88× faster |
+| Memory (RSS) | 176.7 MiB | **12.0 MiB** | ~15× smaller |
+
+Native matters here less for runtime than for the *demo*: "the entire dungeon, engine included, is a
+container that boots in 23ms and idles on 12MB" is itself a teaching point.
+
+Three things to know:
+
+1. **Native does not cross-compile.** The binary targets the architecture it was built on. The build
+   always runs inside a Linux builder container, so no local GraalVM is needed — but on an ARM Mac,
+   plain `--native` yields `linux/arm64`, which is perfect for testing locally and **will not run on
+   an amd64 platform**.
+2. **For a deployable amd64 artifact**, add `--platform linux/amd64`. That emulates the builder and
+   is much slower — and emulated `native-image` is genuinely fragile. If it dies reading the runner
+   jar, build on an amd64 host (CI) instead.
+3. **The binary's architecture and the image's manifest are set separately.** Getting the first right
+   and the second wrong produces an image that lies about itself: manifest `arm64`, entrypoint
+   `x86-64` ELF. Neither image size nor a local run reveals it. The script builds the image with
+   `buildx --platform` and then verifies all three facts agree — manifest arch, native layout, and
+   the real ELF arch — refusing to push on a mismatch.
+
+Native images are tagged `native-<arch>`, never `:latest`, and the script **hard-refuses** to build a
+native image onto `:latest` — that tag is the multi-arch JVM image a deployment may already be
+running, and native images are single-architecture.
+
+### Docker Compose
 
 ```bash
 docker compose up
 ```
 
-* **Play the game**: [http://localhost:8080](http://localhost:8080) (also mapped to
-  [:5173](http://localhost:5173) for muscle memory)
-* **API**: [http://localhost:8080/api/dungeon](http://localhost:8080/api/dungeon)
-
-There is no `build:` context — the image is assembled by Maven, not Docker
-([`Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) copies a prebuilt `target/quarkus-app/`). Run
-section 1 first; it tags the exact name Compose references, so your local build is picked up
-automatically.
-
-> This is a **production JVM image, so it has no Quarkus Dev UI** — there is no workflow diagram at
-> `/q/dev-ui` here. The projector view needs `mvn quarkus:dev` (see [Run it](#run-it)). Compose is
-> for playing the game, not for demoing the diagram.
-
----
-
-### 3. Deploying on the DataRobot Workload API
-
-**[`deploy/datarobot/README.md`](deploy/datarobot/README.md) is the full operator guide** — deploy,
-rolling update, verification checklist and a symptom→cause→fix table.
-[`workload.yaml`](deploy/datarobot/workload.yaml) is the spec. The `dr workload` command group is
-still feature-flagged client-side (without the env var the CLI just prints top-level help, which
-reads like a broken install):
+Then <http://localhost:8080>. Two overrides:
 
 ```bash
-DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/datarobot/workload.yaml
+DUNGEON_HOST_PORT=8090 docker compose up      # 8080 busy (often mvn quarkus:dev)
+DUNGEON_IMAGE=ghcr.io/<you>/dungeon-flow:native-amd64 docker compose up
 ```
 
-Four platform constraints are worth knowing before you change that spec:
+There is no `build:` context — the image is assembled by Maven, not Docker, so run
+`./scripts/dungeon.sh --no-run` first. Compose is for *playing* the game; it's a production image, so
+**there is no workflow diagram** at `/q/dev-ui`. That needs `mvn quarkus:dev`.
 
-* **Images must include a `linux/amd64` manifest.** Apple Silicon defaults to arm64 and the container
-  crash-loops with `exec format error`. Build multi-arch:
-  `-Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64`.
-* **Containers run non-root on a read-only root filesystem.** This is why the UI is served by Quarkus
-  (uid 185, no writable paths needed) instead of nginx, which cannot start under either constraint.
-* **The workload is served under a URL prefix** (`/api/v2/endpoints/workloads/<id>/`) that the edge
-  **strips inbound** and never re-adds to responses. The app makes itself mount-point aware at
-  startup from the injected `WORKLOAD_ID`; every new URL must go through SvelteKit's `base` or it
-  will silently escape the mount. See the operator guide for the mechanism.
-* **`replicaCount` must stay 1.** `GameStore` is an in-memory map with no persistence, so a second
-  replica would 404 any session started on the other pod. Autoscaling must stay off.
+### Deploying
+
+See **[`deploy/README.md`](deploy/README.md)** for the deployment overview, and
+**[`deploy/datarobot/README.md`](deploy/datarobot/README.md)** for the DataRobot Workload API
+operator guide — rolling updates, a verification checklist, and a symptom → cause → fix table built
+from every failure this project actually hit.
 
 ---
 
-### 4. Publishing to GitHub Container Registry (GHCR)
+## Publishing to your own registry
 
-First, authenticate with `ghcr.io` (ensure your GitHub CLI token has `write:packages` scope):
+Everything below assumes GitHub Container Registry (`ghcr.io`); any OCI registry works the same way.
+
+### 1. Point the project at your namespace
+
+Image coordinates live in **one** place. Edit
+[`src/main/resources/application.properties`](src/main/resources/application.properties):
+
+```properties
+quarkus.container-image.registry=ghcr.io
+quarkus.container-image.group=<your-github-username>
+quarkus.container-image.name=dungeon-flow
+quarkus.container-image.tag=latest
+```
+
+`scripts/dungeon.sh` reads these, and fails with instructions if the registry or group is unset — so
+a fork can never silently publish under someone else's namespace.
+
+Then update the deployment manifests, which need literal image references:
+
+| File | Field |
+|---|---|
+| [`deploy/datarobot/workload.yaml`](deploy/datarobot/workload.yaml) | `imageUri` |
+| [`deploy/datarobot/workload-native.yaml`](deploy/datarobot/workload-native.yaml) | `imageUri` |
+| [`docker-compose.yaml`](docker-compose.yaml) | the `DUNGEON_IMAGE` default |
+
+### 2. Authenticate to GHCR
+
+You need a token with the `write:packages` scope. With the
+[GitHub CLI](https://cli.github.com/):
+
 ```bash
 gh auth refresh -h github.com -s write:packages
 ```
 
 ```bash
-gh auth token | docker login ghcr.io -u fmatar --password-stdin
+gh auth token | docker login ghcr.io -u <your-github-username> --password-stdin
 ```
 
-Then build and push in one step. Do the `npm run build` + copy from section 1 first, or you will
-publish an image with a stale UI. **`linux/amd64` is required** for the Workload API; keeping
-`arm64` in the same manifest means the same tag still runs natively on Apple Silicon:
+Or with a [classic personal access token](https://github.com/settings/tokens) (`write:packages`):
 
 ```bash
-mvn clean package -DskipTests -Dquarkus.container-image.build=true -Dquarkus.container-image.push=true -Dquarkus.docker.buildx.platform=linux/amd64,linux/arm64
+echo $CR_PAT | docker login ghcr.io -u <your-github-username> --password-stdin
 ```
 
-> The old `ghcr.io/fmatar/dungeon-flow-ui` image is no longer used — the UI ships inside the backend
-> image now. Nothing references it; delete it from GHCR when convenient.
+### 3. Build and push
 
-## Design decisions
-
-- **Engine:** Quarkus Flow `0.15.1`, pinned to Quarkus platform `3.38.1`, Java 25. Pinning the
-  platform resolves **PRD Open Question #2 / SRS constraint C-2**.
-- **Event routing (PRD Open Question #1):** Crawl correlates moves to sessions on the **raw workflow
-  instance id** (simplest for Crawl), via the `dungeoninstance` CloudEvent extension. Moving to a
-  `playerid` correlation for the Run phase is a change in `GameEvents` + `DungeonResource` only.
-- **No broker (C-3):** moves are published into the engine's default in-process `InMemoryEvents`
-  broker through `WorkflowApplication.eventPublishers()`. No messaging extension is on the classpath.
-- **Inspection read-model:** `GameStore` mirrors the current room per instance as the workflow
-  enters it. This is projection/observation, not game logic — routing/joins/retries/timeouts all
-  stay in the workflow definition (C-1).
-- **Completion vs. inspection:** `GET /api/dungeon/{id}` returns `200` with the victory view once an
-  instance completes, so the player actually sees the win (REQ-FUNC-006), and `404` only when the id
-  is unknown or cleaned up. Strict REQ-FUNC-007 ("`404` after completion") is a one-line change in
-  `DungeonResource.inspect`.
-- **One container, UI included (C-3):** Quarkus serves the SvelteKit build from
-  `META-INF/resources` at `/` and moves the API under `/api` (`quarkus.rest.path`), so the two halves
-  line up with no reverse proxy. An nginx sidecar was tried first and is *impossible* on the Workload
-  API, which runs containers non-root on a read-only filesystem. The UI build is not committed, so
-  `npm run build` + copy is a prerequisite of `mvn package` — [`scripts/run-local.sh`](scripts/run-local.sh)
-  exists so that step cannot be forgotten.
-- **Mount-point awareness:** the app must work both at `/` and under a deployment prefix. It is built
-  with a sentinel `kit.paths.base` that
-  [`SpaFallbackRoute`](src/main/java/org/acme/dungeon/SpaFallbackRoute.java) substitutes at startup
-  from `WORKLOAD_ID`; absent that env var the substitution collapses to `""` and everything is
-  root-absolute, so local and deployed share one code path. Fixing asset URLs alone is not enough —
-  SvelteKit compiles `base` into the client bundle, and a stale `''` makes its router reject the very
-  first URL. Details in [`deploy/datarobot/README.md`](deploy/datarobot/README.md).
-
-### Verify-first checklist (things to sanity-check on first `mvn test`)
-
-These use Quarkus Flow features that are correct per the docs/source but worth confirming on your
-platform build:
-
-1. **Torch timeout** — the fork `listen` has a task `timeout` wrapped in a `try/catch` on the CNCF
-   `…/errors/timeout` type; on timeout it jumps to `Entrance` (respawn). If the exact error type or
-   cross-scope jump needs adjustment, it's isolated to the `ForkWait` block. (`torch_timeout_*` tests
-   cover it.)
-2. **Choice payload flow** — `WhichWay` switches on the output of the `try`-wrapped choice `listen`.
-   If the wrapper changes the output shape, add `.outputAs(...)` to the listen. (`choice_*` tests
-   cover it.)
+```bash
+./scripts/dungeon.sh --push
 ```
+
+Publishes a **multi-arch** (`linux/amd64,linux/arm64`) JVM image. `amd64` is what most platforms
+need; keeping `arm64` in the same manifest means the same tag still runs natively on Apple Silicon.
+
+For native:
+
+```bash
+./scripts/dungeon.sh --native --platform linux/amd64 --push
+```
+
+### 4. Make the package public
+
+New GHCR packages are **private by default**, and a private image is the most common reason a
+deployment sits in `ImagePullBackOff` — the platform can't pull it and the error rarely says so
+plainly.
+
+1. Go to `https://github.com/users/<your-username>/packages/container/dungeon-flow/settings`
+   (or your repo → **Packages** → the package → **Package settings**)
+2. **Danger Zone** → **Change visibility** → **Public**
+
+Verify anonymously — this is the check that matters, because your own `docker pull` succeeds either
+way thanks to your login:
+
+```bash
+docker manifest inspect ghcr.io/<your-username>/dungeon-flow:latest
+```
+
+While you're there, **Connect repository** links the package to your repo so it inherits the README
+and license.
+
+References: [Working with the Container
+registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+· [Configuring package
+visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+
+If you'd rather keep it private, the deployment platform needs image-pull credentials — see
+[`deploy/datarobot/README.md`](deploy/datarobot/README.md), which covers that constraint for the
+Workload API specifically.
+
+---
+
+## Running a demo
+
+The script that has worked live, in order:
+
+1. `mvn quarkus:dev`, and put the **Dev UI workflow diagram** on the projector.
+2. Start a game. Narrate the token *sitting still* at the fork — the engine is waiting for a human.
+   That pause is an event wait, and it costs nothing while it waits.
+3. Send `left`. Pull **only lever A** and let the silence sit. Nothing happens. That's a join
+   holding. Pull B — the gate opens. This is the moment audiences remember.
+4. Set `dungeon.lock.mode=ALWAYS_JAM` and enter the Trap Corridor: three attempts, then the
+   compensation throws you back to the fork.
+5. Start a fresh game and just **wait 60 seconds**. The torch times out and the engine respawns you
+   with nobody touching anything.
+6. Open [`DungeonWorkflow.java`](src/main/java/org/acme/dungeon/DungeonWorkflow.java) and point at
+   the exact `listen`, `switch`, `all(...)` and retry loop that produced each thing they just saw.
+
+For a room full of people playing at once, open `/race` on the projector instead.
+
+---
+
+## Architecture and design decisions
+
+```
+                        ┌──────────────────────────────────────────┐
+  browser ──────────────▶  Quarkus (one container, one process)    │
+  curl    ──────────────▶                                          │
+                        │  /            SvelteKit SPA (static)     │
+                        │  /api/*       REST + SSE                 │
+                        │                    │                     │
+                        │                    ▼                     │
+                        │  CloudEvents ─▶ in-process broker        │
+                        │                    │                     │
+                        │                    ▼                     │
+                        │  Quarkus Flow engine ── DungeonWorkflow  │
+                        │        │                                 │
+                        │        ▼                                 │
+                        │  GameStore (in-memory read-model) ─▶ SSE │
+                        └──────────────────────────────────────────┘
+```
+
+- **Engine:** Quarkus Flow `0.15.1` on Quarkus platform `3.38.1`, Java 25. The platform is pinned
+  deliberately.
+- **No game logic in Java.** Routing, joins, retries and timeouts live *only* in the workflow
+  definition. `GameStore` projects state for display; `LockService` answers "did the pick succeed?".
+  Neither decides where the player goes. This is what makes the demo honest.
+- **No broker.** Moves are published into the engine's default in-process `InMemoryEvents` publisher.
+  No messaging extension is on the classpath, so the game is one self-contained process.
+- **Correlation** is on the raw workflow instance id via the `dungeoninstance` CloudEvent extension —
+  the simplest thing that works. Moving to a player-id correlation would touch `GameEvents` and
+  `DungeonResource` only.
+- **In-memory state, so exactly one replica.** `GameStore` is a `ConcurrentHashMap` with no
+  persistence: a second replica would 404 any session started on the other one. This is a property of
+  the app, not of the JVM — native changes nothing here.
+- **One container, UI included.** The API moved under `/api` so the two halves line up with no
+  reverse proxy. An nginx sidecar was tried first and is *impossible* on the target platform, which
+  runs containers non-root on a read-only filesystem — nginx cannot write its config or cache.
+- **Mount-point awareness.** The app must work at `/` *and* under a deployment path prefix. It's
+  built with a sentinel `kit.paths.base` that
+  [`SpaFallbackRoute`](src/main/java/org/acme/dungeon/SpaFallbackRoute.java) substitutes at startup;
+  with no prefix the substitution collapses to `""`, so local and deployed share one code path.
+  Fixing asset URLs alone is *not* enough — SvelteKit compiles `base` into the client bundle, and a
+  stale `''` makes its router reject the very first URL and render nothing. Full explanation in
+  [`deploy/datarobot/README.md`](deploy/datarobot/README.md).
+- **Completion is visible.** `GET /api/dungeon/{id}` returns `200` with the victory view after an
+  instance completes, so the player actually sees the win, and `404` only for an unknown id.
+
+Product and requirements background lives in [`specs/`](specs/) (PRD and SRS).
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `release version 25 not supported` | JDK older than 25 | Install JDK 25; `./scripts/dungeon.sh` picks a suitable one automatically |
+| Blank page, API works | UI never copied into `META-INF/resources` | Use `./scripts/dungeon.sh`, or do the copy step |
+| `syntax error near unexpected token` running a script | Old copy invoked with `sh` | Fixed — the script re-execs under bash; `git pull` |
+| `docker compose up` aborts, `address already in use` | `mvn quarkus:dev` holds 8080 | `DUNGEON_HOST_PORT=8090 docker compose up` |
+| `curl localhost:5173` hits the wrong process | macOS resolves `localhost` to `::1` first; a Vite dev server may hold the IPv6 side | Use `127.0.0.1` explicitly |
+| No workflow diagram at `/q/dev-ui` | Production image has no Dev UI | `mvn quarkus:dev` |
+| `exec format error` in a container | arm64 image on an amd64 host | Build multi-arch (JVM) or `--platform linux/amd64` (native) |
+| Deployment stuck in `ImagePullBackOff` | GHCR package is private | [Make it public](#4-make-the-package-public) or configure pull credentials |
+| Sessions 404 intermittently | More than one replica with in-memory state | Set `replicaCount` back to 1 |
+
+More, specific to deployment: [`deploy/datarobot/README.md`](deploy/datarobot/README.md#diagnostics).
+
+---
+
+## Project layout
+
+```
+├── src/main/java/org/acme/dungeon/
+│   ├── DungeonWorkflow.java     ← the dungeon. The whole map, one file.
+│   ├── DungeonResource.java     ← HTTP API: moves in, CloudEvents out
+│   ├── GameStore.java           ← in-memory read-model + SSE fan-out
+│   ├── LockService.java         ← the random lock (no game rules)
+│   ├── SpaFallbackRoute.java    ← serves the SPA, mount-point aware
+│   └── Narratives.java          ← all player-facing prose
+├── src/main/docker/             ← Dockerfile.jvm, Dockerfile.native, …
+├── src/main/resources/
+│   └── application.properties   ← image coordinates + game balance
+├── src/test/java/…              ← workflow tests + REST journey
+├── web/                         ← SvelteKit UI  → web/README.md
+├── deploy/                      ← deployment    → deploy/README.md
+│   └── datarobot/               ← Workload API  → deploy/datarobot/README.md
+├── scripts/dungeon.sh           ← build · run · push · native · stop
+├── docker-compose.yaml
+└── specs/                       ← PRD + SRS
+```
+
+---
+
+## Contributing
+
+Two conventions matter more than style here:
+
+1. **Game rules belong in the workflow, not in Java.** If you find yourself writing an `if` in Java
+   that decides where a player goes, it belongs in
+   [`DungeonWorkflow.java`](src/main/java/org/acme/dungeon/DungeonWorkflow.java) instead. The demo's
+   credibility rests on this.
+2. **Every URL the UI emits must go through SvelteKit's `base`.** A literal `href="/race"` or
+   `fetch('/api/…')` works locally and silently escapes the mount when deployed under a path prefix.
+   See [`web/README.md`](web/README.md).
+
+Before opening a PR: `mvn test` and `./scripts/dungeon.sh --native` (the native path catches
+reflection problems that the JVM build and the whole test suite cannot see).

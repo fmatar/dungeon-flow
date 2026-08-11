@@ -1,5 +1,9 @@
 # Dungeon Flow on the DataRobot Workload API
 
+> Part of the [deployment docs](../README.md) for [Dungeon Flow](../../README.md). Read
+> [`deploy/README.md`](../README.md) first if you have not — it covers the four cross-platform
+> concerns (architecture, single replica, image pullability, path prefixes) that this guide assumes.
+
 Everything needed to deploy, update, verify and debug the game as a managed container workload.
 The spec itself is [`workload.yaml`](workload.yaml).
 
@@ -74,7 +78,7 @@ Build and publish the image first — `--push` runs the UI build and the copy in
 cannot publish a stale UI:
 
 ```bash
-scripts/run-local.sh --push --no-run
+scripts/dungeon.sh --push --no-run
 ```
 
 ## Update a running workload
@@ -131,7 +135,7 @@ startup:
 
 | Piece | Role |
 |---|---|
-| [`web/vite.config.ts`](../../web/vite.config.ts) | `kit.paths.base = '/__DR_BASE__'` — the sentinel |
+| [`web/vite.config.ts`](../../web/vite.config.ts) | `kit.paths.base = '/__DR_BASE__'` — the sentinel, applied on `command === 'build'` only, so `vite dev` still serves from the root |
 | [`SpaFallbackRoute`](../../src/main/java/org/acme/dungeon/SpaFallbackRoute.java) | Substitutes the sentinel into the shell and every text asset at startup; serves the SPA fallback for client routes |
 | [`web/src/lib/api.ts`](../../web/src/lib/api.ts) | Calls `${base}/api/dungeon`, never a literal path |
 | [`web/src/routes/+layout.svelte`](../../web/src/routes/+layout.svelte) | Prefixes `href`s with `base`; compares `page.url.pathname` against the prefixed path |
@@ -216,7 +220,7 @@ an accepted trade for a low-importance demo. If you add one back, be generous
 | Blank page; assets 404 at `https://app.datarobot.com/_app/…`; `MIME type ('text/html')` on the CSS | Emitted URLs missing the prefix | The mount-awareness chain above; check `__DR_BASE__` is substituted |
 | `__DR_BASE__` visible in the served HTML | Sentinel mismatch between `vite.config.ts` and `SpaFallbackRoute` | Re-sync the constant |
 | Console `Not found: /api/v2/endpoints/workloads/<id>/` | SvelteKit `base` is `''` in the bundle — assets alone were fixed | Sentinel substitution must cover `/_app` JS, not just the HTML |
-| Blank `/` but a working API | The UI was never copied into `META-INF/resources` before `mvn package` | `scripts/run-local.sh`, or the copy step by hand |
+| Blank `/` but a working API | The UI was never copied into `META-INF/resources` before `mvn package` | `scripts/dungeon.sh`, or the copy step by hand |
 | `exec format error`, instant crash-loop | arm64-only image | Build multi-arch `linux/amd64,linux/arm64` (JVM), or `--platform linux/amd64` (native) |
 | Native image "looks fine" but the manifest says arm64 | The binary was built amd64 but `docker build` ran on an ARM host | Rebuild the image with `docker buildx build --platform linux/amd64`; verify with the three-way check above |
 | `CrashLoopBackOff`, nginx `/etc/nginx/conf.d is not writable` / `mkdir /var/cache/nginx` denied | Containers run **non-root on a read-only root filesystem**; stock nginx cannot start | Don't add an nginx sidecar — Quarkus (uid 185) serves the UI |
@@ -243,3 +247,26 @@ deliberate exposure decision, not a default:
 routes:
   - { path: /, auth: disabled }
 ```
+
+---
+
+## Deploying this to *your* DataRobot account
+
+The workload ids and image references in this guide are from the reference deployment. To run it
+yourself:
+
+1. **Point the project at your registry** and make the package pullable —
+   [root README > Publishing to your own registry](../../README.md#publishing-to-your-own-registry).
+2. **Update `imageUri`** in [`workload.yaml`](workload.yaml) and
+   [`workload-native.yaml`](workload-native.yaml).
+3. **Rename the workloads** if you like (`name:` in each spec). Ids are assigned by the platform on
+   create — the ones quoted throughout this guide are examples, not something to copy.
+4. **Authenticate**: `DATAROBOT_ENDPOINT` (ending in `/api/v2`) and `DATAROBOT_API_TOKEN`, or a
+   `~/.config/datarobot/drconfig.yaml` written by `dr` itself.
+5. `dr workload create --spec-file …`, then work through
+   [Verify a deployment](#verify-a-deployment).
+
+---
+
+Root docs: [`../../README.md`](../../README.md) · Deployment overview:
+[`../README.md`](../README.md) · UI: [`../../web/README.md`](../../web/README.md)

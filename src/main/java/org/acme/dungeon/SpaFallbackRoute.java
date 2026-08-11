@@ -163,7 +163,7 @@ public class SpaFallbackRoute {
     private String read(String resource) {
         String content = readOrNull(resource);
         if (content == null) {
-            // The UI is copied into META-INF/resources by the build; see scripts/run-local.sh.
+            // The UI is copied into META-INF/resources by the build; see scripts/dungeon.sh.
             // Failing at startup beats serving a blank page with no explanation.
             throw new IllegalStateException(resource + " is missing from the classpath. "
                     + "Build the UI first: npm --prefix web run build "

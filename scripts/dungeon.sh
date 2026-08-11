@@ -9,17 +9,17 @@
 # explain why. This script exists so that cannot happen.
 #
 # Usage:
-#   scripts/run-local.sh                 build + run, auto-pick a free port
-#   scripts/run-local.sh --port 9000     pin the host port
-#   scripts/run-local.sh --push          also push the image to GHCR
-#   scripts/run-local.sh --no-run        build the image only
-#   scripts/run-local.sh --with-tests    run the Maven test suite too (slower)
-#   scripts/run-local.sh --stop          stop a previously started stack
-#   scripts/run-local.sh --help
+#   scripts/dungeon.sh                 build + run, auto-pick a free port
+#   scripts/dungeon.sh --port 9000     pin the host port
+#   scripts/dungeon.sh --push          also push the image to GHCR
+#   scripts/dungeon.sh --no-run        build the image only
+#   scripts/dungeon.sh --with-tests    run the Maven test suite too (slower)
+#   scripts/dungeon.sh --stop          stop a previously started stack
+#   scripts/dungeon.sh --help
 #
 # Native (GraalVM) builds — a tiny, fast-booting image instead of the JVM one:
-#   scripts/run-local.sh --native                          host arch, ~1 min
-#   scripts/run-local.sh --native --platform linux/amd64   what DataRobot needs
+#   scripts/dungeon.sh --native                          host arch, ~1 min
+#   scripts/dungeon.sh --native --platform linux/amd64   what DataRobot needs
 #
 # Native does NOT cross-compile: the binary targets the build architecture. The
 # build always runs inside a Linux builder container (no local GraalVM needed),
@@ -29,7 +29,7 @@
 #
 # Native images are tagged native-<arch> so they never clobber the JVM :latest.
 #
-# Re-exec under a real bash. Invoking this as `sh scripts/run-local.sh` bypasses the
+# Re-exec under a real bash. Invoking this as `sh scripts/dungeon.sh` bypasses the
 # shebang above, and the bash-only features used below (process substitution, [[ ]],
 # arrays) are then syntax errors. The first one sits inside a function, so it fails
 # partway through with a bare "syntax error near unexpected token" instead of up front.
@@ -40,10 +40,10 @@
 #
 # Must stay ABOVE `set -o pipefail` (not POSIX) and use only POSIX syntax itself.
 # Shells parse one command at a time, so exec-ing here means sh never parses the rest.
-if [ -z "${RUN_LOCAL_REEXECED:-}" ]; then
+if [ -z "${DUNGEON_SH_REEXECED:-}" ]; then
     if command -v bash >/dev/null 2>&1; then
-        RUN_LOCAL_REEXECED=1
-        export RUN_LOCAL_REEXECED
+        DUNGEON_SH_REEXECED=1
+        export DUNGEON_SH_REEXECED
         exec bash "$0" "$@"
     fi
     echo "error: this script needs bash, which was not found on PATH." >&2
@@ -246,10 +246,21 @@ info "staged $(find "$STATIC_DIR" -type f | wc -l | tr -d ' ') files"
 # Image coordinates, passed explicitly rather than relying on application.properties,
 # so the command this script runs is self-describing and cannot drift from the file.
 prop() { sed -n "s/^$1=//p" "$REPO_ROOT/src/main/resources/application.properties" | tail -1; }
-IMG_REG=$(prop 'quarkus\.container-image\.registry'); : "${IMG_REG:=ghcr.io}"
-IMG_GRP=$(prop 'quarkus\.container-image\.group');    : "${IMG_GRP:=fmatar}"
-IMG_NAME=$(prop 'quarkus\.container-image\.name');    : "${IMG_NAME:=dungeon-flow}"
-IMG_TAG=$(prop 'quarkus\.container-image\.tag');      : "${IMG_TAG:=latest}"
+IMG_REG=$(prop 'quarkus\.container-image\.registry')
+IMG_GRP=$(prop 'quarkus\.container-image\.group')
+IMG_NAME=$(prop 'quarkus\.container-image\.name'); : "${IMG_NAME:=dungeon-flow}"
+IMG_TAG=$(prop 'quarkus\.container-image\.tag');   : "${IMG_TAG:=latest}"
+
+# Deliberately NOT defaulted to a hardcoded owner: on a fork that would silently build
+# and push under someone else's namespace. application.properties is the single source
+# of truth for image coordinates.
+if [[ -z $IMG_REG || -z $IMG_GRP ]]; then
+    die "image coordinates are not set in src/main/resources/application.properties.
+    Add (substituting your own registry namespace):
+      quarkus.container-image.registry=ghcr.io
+      quarkus.container-image.group=<your-github-username>
+    See README > 'Publishing to your own registry'."
+fi
 
 NATIVE_TAG=""
 if [[ $DO_NATIVE -eq 1 ]]; then
@@ -513,7 +524,7 @@ printf '    %-14s %s\n' "image:"   "${IMG_SIZE:-?}"
 printf '    %-14s %s\n' "startup:" "${STARTUP:-?}s"
 printf '    %-14s %s\n' "memory:"  "${MEM:-?}"
 if [[ $DO_NATIVE -eq 0 ]]; then
-    info "${DIM}compare against: scripts/run-local.sh --native${RST}"
+    info "${DIM}compare against: scripts/dungeon.sh --native${RST}"
 fi
 
 # ===========================================================================
@@ -524,6 +535,6 @@ printf '   Play:  %shttp://localhost:%s%s\n' "$BOLD" "$EFFECTIVE_PORT" "$RST"
 printf '   Race:  http://localhost:%s/race\n' "$EFFECTIVE_PORT"
 printf '   API:   http://localhost:%s/api/dungeon\n' "$EFFECTIVE_PORT"
 printf '\n   %sLogs:%s  docker compose logs -f\n' "$DIM" "$RST"
-printf '   %sStop:%s  scripts/run-local.sh --stop\n' "$DIM" "$RST"
+printf '   %sStop:%s  scripts/dungeon.sh --stop\n' "$DIM" "$RST"
 printf '\n   %sNote: this is a production image, so there is no Quarkus Dev UI.%s\n' "$DIM" "$RST"
 printf '   %sFor the workflow diagram at /q/dev-ui, run: mvn quarkus:dev%s\n\n' "$DIM" "$RST"
