@@ -11,7 +11,7 @@
 services:
   app:
     # Overridable so the same compose file can run a native build without clobbering
-    # the JVM :latest tag — `scripts/run-local.sh --native` sets this to the
+    # the JVM :latest tag — `scripts/dungeon.sh --native` sets this to the
     # native-<arch> image it just built.
     image: ${DUNGEON_IMAGE:-ghcr.io/fmatar/dungeon-flow:latest}
     ports:
