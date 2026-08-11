@@ -1,18 +1,10 @@
 services:
   backend:
     image: ghcr.io/fmatar/dungeon-flow:latest
-    build:
-      context: .
-      dockerfile: src/main/docker/Dockerfile.jvm
-    ports:
-      - "8080:8080"
     restart: unless-stopped
 
   frontend:
     image: ghcr.io/fmatar/dungeon-flow-ui:latest
-    build:
-      context: ./web
-      dockerfile: Dockerfile
     ports:
       - "80:80"
       - "5173:80" # Map 5173 to support local dev port expectations

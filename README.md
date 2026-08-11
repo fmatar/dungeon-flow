@@ -167,12 +167,13 @@ gh auth token | docker login ghcr.io -u fmatar --password-stdin
 
 * **Publish the Backend**: Build and push in one step directly through Maven properties:
   ```bash
-  mvn clean package -DskipTests \
+  mvn clean package -DskipTests -Pnative \
     -Dquarkus.container-image.build=true \
     -Dquarkus.container-image.push=true \
     -Dquarkus.container-image.registry=ghcr.io \
     -Dquarkus.container-image.group=fmatar \
     -Dquarkus.container-image.name=dungeon-flow \
+    -Dquarkus.docker.buildx.platform=linux/amd64 \
     -Dquarkus.container-image.tag=latest
   ```
 
