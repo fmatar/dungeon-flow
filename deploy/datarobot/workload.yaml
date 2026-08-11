@@ -1,0 +1,66 @@
+# Dungeon Flow on the DataRobot Workload API
+# ---------------------------------------------------------------------------
+# Deploy with:
+#   DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/datarobot/workload.yaml
+# (the `dr workload` command group is still feature-flagged client-side)
+#
+# ONE container serves everything: Quarkus hosts the SvelteKit build at / and the
+# game API under /api. This is SRS constraint C-3 taken literally.
+#
+# An earlier revision ran nginx as a second container to serve the UI and reverse
+# proxy /api. The platform runs containers as NON-ROOT with a READ-ONLY root
+# filesystem, and the stock nginx image cannot start under either constraint:
+#   20-envsubst-on-templates.sh: ERROR: /etc/nginx/conf.d is not writable
+#   nginx: [emerg] mkdir("/var/cache/nginx/client_temp") failed (13: Permission denied)
+# The Quarkus UBI image already runs as uid 185 and needs no writable paths, so
+# folding the UI into it removed the entire failure mode rather than working around it.
+#
+# replicaCount MUST stay 1: GameStore is an in-memory ConcurrentHashMap with no
+# persistence, so a second replica would 404 any session started on the other pod.
+# Do not enable autoscaling.
+name: dungeon-flow
+importance: low
+
+artifact:
+  name: dungeon-flow-artifact
+  spec:
+    type: service
+    containerGroups:
+      - name: default
+        containers:
+          - name: app
+            imageUri: ghcr.io/fmatar/dungeon-flow:latest
+            primary: true
+            # Must be >= 1024. Quarkus already defaults here, so nothing to override.
+            port: 8080
+            # This exact probe config is the one verified running. An earlier attempt
+            # used path /api/dungeon with failureThreshold 3 plus a liveness probe at
+            # initialDelaySeconds 40, and the pod was SIGTERMed (exit 143) ~60s after
+            # each start, crash-looping - even though the app logged a clean
+            # "started in 2.0s" every time and that path returns 200. Several params
+            # were relaxed at once to recover it, so the precise trigger was NOT
+            # isolated; treat the values below as known-good rather than as minimal.
+            #
+            # `/` is a static file from META-INF/resources, so readiness does not
+            # depend on the REST layer or the workflow engine being warm.
+            readinessProbe:
+              path: /
+              port: 8080
+              initialDelaySeconds: 15
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 30
+            # No livenessProbe. A wedged JVM will therefore NOT be auto-restarted -
+            # an accepted trade for a low-importance demo workload. If you add one
+            # back, be generous (initialDelaySeconds >= 90) and redeploy behind a
+            # replacement so you can roll back.
+
+runtime:
+  containerGroups:
+    - name: default
+      replicaCount: 1 # see note above - do NOT raise
+      containers:
+        - name: app
+          resourceAllocation:
+            cpu: 1
+            memory: "1GB"

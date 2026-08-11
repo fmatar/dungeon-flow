@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import io.serverlessworkflow.impl.WorkflowApplication;
 import io.serverlessworkflow.impl.WorkflowInstance;
 import io.serverlessworkflow.impl.WorkflowStatus;
@@ -70,9 +71,15 @@ public class DungeonResource {
 
     // === Responses ==========================================================================
 
+    // Registered for reflection so Jackson can serialize them in a NATIVE build. Without this the
+    // records compile fine, the endpoints route fine, and every response 500s at runtime with
+    // "No serializer found ... you may need to configure reflection" - a native-only failure that
+    // the JVM build cannot reveal. The domain records are registered on DungeonWorkflow.
+    @RegisterForReflection
     public record StartResponse(String instanceId, GameView entrance, long torchTimeoutSeconds) {
     }
 
+    @RegisterForReflection
     public record StateResponse(String instanceId, String status, GameView view) {
     }
 
