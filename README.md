@@ -36,8 +36,8 @@ where the player goes next** (SRS constraint C-1).
 
 ## Run it
 
-Prerequisites: **Java 17+** and Maven (or the `mvnw` wrapper). First run downloads Quarkus 3.33.3 +
-quarkus-flow 0.15.1 from Maven Central.
+Prerequisites: **Java 25** (the project compiles with `maven.compiler.release=25`) and Maven (or the
+`mvnw` wrapper). First run downloads Quarkus 3.38.1 + quarkus-flow 0.15.1 from Maven Central.
 
 ```bash
 mvn quarkus:dev        # hot-reload dev mode on http://localhost:8080
@@ -84,6 +84,7 @@ entrance. **A jammed lock** that never opens respawns you at the fork after 3 at
 | `POST /dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice | REQ-FUNC-002 |
 | `POST /dungeon/{id}/lever-a`, `POST /dungeon/{id}/lever-b` | Pull a lever | REQ-FUNC-003 |
 | `GET /dungeon/{id}` | Inspect current room/narrative/status | REQ-FUNC-007 |
+| `GET /dungeon/{id}/stream` | SSE stream of room transitions + lock attempts (drives the web UI) | REQ-FUNC-007 |
 | `GET /dungeon` | List all sessions | REQ-FUNC-008/012 |
 | `DELETE /dungeon/{id}` | Cancel + forget a session | REQ-FUNC-012 |
 
@@ -127,10 +128,13 @@ You can build local versions of both images directly from source without downloa
 
 * **Backend (Quarkus JVM)**: Build via the Quarkus Maven extension using the local Docker daemon:
   ```bash
-  # Packages the jar and builds the local image fady/dungeon-flow:1.0.0-SNAPSHOT
+  # Packages the jar and builds the local image ghcr.io/fmatar/dungeon-flow:latest
   mvn clean package -DskipTests -Dquarkus.container-image.build=true
   ```
-  *(Under the hood, Quarkus will use the [`src/main/docker/Dockerfile.jvm`](file:///Users/fady/workspace/datarobot/dungeon-flow/src/main/docker/Dockerfile.jvm) recipe).*
+  *(Under the hood, Quarkus will use the [`src/main/docker/Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) recipe. Image
+  coordinates come from `quarkus.container-image.*` in
+  [`application.properties`](src/main/resources/application.properties); `build`/`push` are
+  deliberately **not** set there, so a plain `mvn package` never touches Docker or a registry.)*
 
 * **Frontend (SvelteKit + Nginx)**: Build the multi-stage static asset + Nginx server image:
   ```bash
@@ -142,15 +146,32 @@ You can build local versions of both images directly from source without downloa
 
 ### 2. Running Locally with Docker Compose (No Downloading)
 
-The [`docker-compose.yaml`](file:///Users/fady/workspace/datarobot/dungeon-flow/docker-compose.yaml) is configured with local build contexts. To build and spin up the complete stack locally using your local source directories instead of downloading remote registry images:
+By default [`docker-compose.yaml`](docker-compose.yaml) pulls the two published images:
 
 ```bash
-# Rebuilds and launches both backend & frontend locally
-docker compose up --build
+docker compose up
 ```
 
 * **Play Game (UI)**: [http://localhost:5173](http://localhost:5173) or [http://localhost:80](http://localhost:80)
-* **Backend API / Dev UI**: [http://localhost:8080](http://localhost:8080)
+* **Backend API**: [http://localhost:8080](http://localhost:8080)
+
+To run **your local source** instead, note that the two services differ:
+
+* The **frontend** has a self-contained multi-stage `build:` context, so `docker compose up --build`
+  rebuilds the UI from `web/` directly.
+* The **backend** image is assembled by Maven, not by Docker —
+  [`Dockerfile.jvm`](src/main/docker/Dockerfile.jvm) copies a prebuilt `target/quarkus-app/`, so it
+  cannot be built by Compose from a clean tree. Run the Maven command from section 1 first; it tags
+  the image with the exact name Compose references, so your local build is picked up automatically:
+
+```bash
+mvn clean package -DskipTests -Dquarkus.container-image.build=true   # backend, via Maven
+docker compose up --build                                            # frontend from source + launch
+```
+
+> The backend container is a **production JVM image, so it has no Quarkus Dev UI** — there is no
+> workflow diagram at `/q/dev-ui` here. The projector view needs `mvn quarkus:dev` (see [Run
+> it](#run-it)). Compose is for playing the game, not for demoing the diagram.
 
 ---
 
@@ -185,7 +206,7 @@ gh auth token | docker login ghcr.io -u fmatar --password-stdin
 
 ## Design decisions
 
-- **Engine:** Quarkus Flow `0.15.1`, pinned to Quarkus platform `3.33.3`, Java 17. Pinning the
+- **Engine:** Quarkus Flow `0.15.1`, pinned to Quarkus platform `3.38.1`, Java 25. Pinning the
   platform resolves **PRD Open Question #2 / SRS constraint C-2**.
 - **Event routing (PRD Open Question #1):** Crawl correlates moves to sessions on the **raw workflow
   instance id** (simplest for Crawl), via the `dungeoninstance` CloudEvent extension. Moving to a

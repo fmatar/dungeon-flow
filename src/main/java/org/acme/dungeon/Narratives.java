@@ -62,7 +62,7 @@ public final class Narratives {
             Room.TREASURE_ROOM,
             "The final door swings wide. Gold catches your torchlight - the Treasure Room, and it "
                     + "is all yours. You win!",
-            "Victory. This instance is complete; inspecting it now returns 404 (the completion "
-                    + "signal).",
+            "Victory. The instance reached its terminal state - inspecting it now returns this "
+                    + "same view with status COMPLETED.",
             true);
 }

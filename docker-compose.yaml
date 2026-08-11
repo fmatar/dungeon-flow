@@ -1,10 +1,21 @@
 services:
   backend:
     image: ghcr.io/fmatar/dungeon-flow:latest
+    ports:
+      # Exposed so you can curl the API directly alongside the UI. Note this is a
+      # production JVM image, so there is no Quarkus Dev UI here - the workflow
+      # diagram needs `mvn quarkus:dev` (see README > Run it).
+      - "8080:8080"
     restart: unless-stopped
 
   frontend:
     image: ghcr.io/fmatar/dungeon-flow-ui:latest
+    # Self-contained multi-stage build, so `docker compose up --build` rebuilds the
+    # UI straight from web/. The backend has no build: stanza on purpose - its image
+    # is assembled by Maven (see README > Containerization).
+    build:
+      context: ./web
+      dockerfile: Dockerfile
     ports:
       - "80:80"
       - "5173:80" # Map 5173 to support local dev port expectations
