@@ -29,6 +29,27 @@
 #
 # Native images are tagged native-<arch> so they never clobber the JVM :latest.
 #
+# Re-exec under a real bash. Invoking this as `sh scripts/run-local.sh` bypasses the
+# shebang above, and the bash-only features used below (process substitution, [[ ]],
+# arrays) are then syntax errors. The first one sits inside a function, so it fails
+# partway through with a bare "syntax error near unexpected token" instead of up front.
+#
+# Testing for BASH_VERSION is NOT sufficient: macOS /bin/sh *is* bash in POSIX mode, so
+# it sets BASH_VERSION while still rejecting process substitution. Hence a sentinel -
+# re-exec unconditionally, exactly once.
+#
+# Must stay ABOVE `set -o pipefail` (not POSIX) and use only POSIX syntax itself.
+# Shells parse one command at a time, so exec-ing here means sh never parses the rest.
+if [ -z "${RUN_LOCAL_REEXECED:-}" ]; then
+    if command -v bash >/dev/null 2>&1; then
+        RUN_LOCAL_REEXECED=1
+        export RUN_LOCAL_REEXECED
+        exec bash "$0" "$@"
+    fi
+    echo "error: this script needs bash, which was not found on PATH." >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 # --- pretty output ----------------------------------------------------------
