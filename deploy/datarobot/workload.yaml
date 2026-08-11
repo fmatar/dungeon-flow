@@ -33,19 +33,27 @@ artifact:
             primary: true
             # Must be >= 1024. Quarkus already defaults here, so nothing to override.
             port: 8080
-            # No quarkus-smallrye-health on the classpath, so there is no /q/health.
-            # GET /api/dungeon (list sessions) returns 200 with a JSON array and is
-            # the cheapest honest readiness signal available.
+            # This exact probe config is the one verified running. An earlier attempt
+            # used path /api/dungeon with failureThreshold 3 plus a liveness probe at
+            # initialDelaySeconds 40, and the pod was SIGTERMed (exit 143) ~60s after
+            # each start, crash-looping - even though the app logged a clean
+            # "started in 2.0s" every time and that path returns 200. Several params
+            # were relaxed at once to recover it, so the precise trigger was NOT
+            # isolated; treat the values below as known-good rather than as minimal.
+            #
+            # `/` is a static file from META-INF/resources, so readiness does not
+            # depend on the REST layer or the workflow engine being warm.
             readinessProbe:
-              path: /api/dungeon
+              path: /
               port: 8080
-              initialDelaySeconds: 10
+              initialDelaySeconds: 15
               periodSeconds: 10
-            livenessProbe:
-              path: /api/dungeon
-              port: 8080
-              initialDelaySeconds: 40
-              periodSeconds: 20
+              timeoutSeconds: 5
+              failureThreshold: 30
+            # No livenessProbe. A wedged JVM will therefore NOT be auto-restarted -
+            # an accepted trade for a low-importance demo workload. If you add one
+            # back, be generous (initialDelaySeconds >= 90) and redeploy behind a
+            # replacement so you can roll back.
 
 runtime:
   containerGroups:
