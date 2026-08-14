@@ -32,6 +32,18 @@
 	--crt-green: #4ade80;
 	--crt-green-dim: #22c55e;
 	--crt-amber: #fbbf24;
+
+	/* Riddle-gate warmth ramp. Deliberately stays inside the phosphor palette: on a CRT, "hotter"
+	   reads as brighter and amber-shifted, not as blue-to-red. A blue mercury column in a green
+	   terminal looks like a different application, and the brightness ramp alone carries the
+	   cold-to-hot reading even for a viewer who cannot separate the hues. */
+	--heat-0: #1c3b2a; /* freezing - barely lit phosphor */
+	--heat-1: #2f7d52; /* cold */
+	--heat-2: #22c55e; /* cool */
+	--heat-3: #4ade80; /* warm - full phosphor green */
+	--heat-4: #a3e635; /* hot - shifting toward amber */
+	--heat-5: #fbbf24; /* scalding - amber */
+	--heat-6: #fef3c7; /* solved - white-hot */
 }
 
 html,

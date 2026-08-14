@@ -26,4 +26,11 @@ public final class GameEvents {
 
     /** Player pulls lever B in the Lever Room. Data: {} */
     public static final String LEVER_B = "game.lever.b";
+
+    /**
+     * Player submits an answer to the riddle gating a door. Data: {} — the answer itself is recorded
+     * in {@link GameStore} by the resource before this fires, so the event is a pure trigger and the
+     * workflow never has to parse an event payload. See {@link RiddleAnswer}.
+     */
+    public static final String RIDDLE_ANSWER = "game.riddle.answer";
 }

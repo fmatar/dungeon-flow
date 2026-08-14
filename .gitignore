@@ -31,3 +31,10 @@ src/main/resources/META-INF/resources/
 # and the image build use `npm ci`). A stray `pnpm install` regenerates this and it
 # has been committed by accident before. Delete this rule if the project moves to pnpm.
 web/pnpm-lock.yaml
+
+# Local agent/tooling scratch — not part of the project
+.agents/
+.claude/
+.codex/
+skills-lock.json
+loadtest/

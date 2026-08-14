@@ -47,7 +47,10 @@ import jakarta.inject.Inject;
     PlayerMove.class,
     GameView.class,
     Room.class,
-    StreamEvent.class
+    StreamEvent.class,
+    RiddleState.class,
+    RiddleView.class,
+    RiddleAnswer.class
 })
 @ApplicationScoped
 public class DungeonWorkflow extends Flow {
@@ -61,6 +64,12 @@ public class DungeonWorkflow extends Flow {
     @Inject
     LockService lockService;
 
+    @Inject
+    RiddleService riddles;
+
+    @ConfigProperty(name = "dungeon.riddle.max-attempts", defaultValue = "3")
+    int riddleAttempts;
+
     @ConfigProperty(name = "dungeon.trap.max-attempts", defaultValue = "3")
     int maxAttempts;
 
@@ -71,9 +80,11 @@ public class DungeonWorkflow extends Flow {
     public Workflow descriptor() {
         // Capture config into locals so the DSL lambdas don't close over the CDI proxy.
         final int maxTries = this.maxAttempts;
+        final int riddleTries = this.riddleAttempts;
         final String torch = this.torchTimeout;
         final GameStore gameStore = this.store;
         final LockService locks = this.lockService;
+        final RiddleService riddleService = this.riddles;
 
         return workflow("dungeon-flow")
 
@@ -104,10 +115,72 @@ public class DungeonWorkflow extends Flow {
                                                 .then("Entrance"))),
 
                         // Route on the choice payload (output of the successful listen).
-                        // Unknown directions fall through to the fork again (respawn).
+                        // Unknown directions fall through to the fork again (respawn). Both real
+                        // directions go to the SAME gate - the direction travels in the RiddleState
+                        // that PoseRiddle emits, so one gate serves both doors.
                         switchCase("WhichWay",
-                                caseOf((PlayerMove m) -> m.isLeft(), PlayerMove.class).then("LeverRoom"),
-                                caseOf((PlayerMove m) -> m.isRight(), PlayerMove.class).then("TrapCorridor"),
+                                caseOf((PlayerMove m) -> m.isLeft(), PlayerMove.class).then("PoseRiddleLeft"),
+                                caseOf((PlayerMove m) -> m.isRight(), PlayerMove.class).then("PoseRiddleRight"),
+                                caseDefault("Fork")),
+
+                        // === Riddle gate: listen + bounded retry + compensation ==============
+                        // Every door is gated by a riddle. The shape is deliberately the same as the
+                        // Trap Corridor's lock - a listen for the player's answer, a switch on the
+                        // graded result, and a compensation when attempts run out - because seeing one
+                        // primitive guard two completely different fictions is the lesson.
+                        //
+                        // Two entry tasks rather than one only because the chosen direction has to be
+                        // captured into workflow data; from AwaitAnswer onward there is a single path.
+                        withInstanceId("PoseRiddleLeft",
+                                (id, in) -> poseGate(gameStore, riddleService, id, "left"),
+                                Object.class, RiddleState.class)
+                                .then("AwaitAnswer"),
+
+                        withInstanceId("PoseRiddleRight",
+                                (id, in) -> poseGate(gameStore, riddleService, id, "right"),
+                                Object.class, RiddleState.class)
+                                .then("AwaitAnswer"),
+
+                        // The engine parks here, consuming nothing, until the player answers.
+                        listen("AwaitAnswer",
+                                toOne(consumed(GameEvents.RIDDLE_ANSWER)
+                                        .extensionByInstanceId(GameEvents.CORRELATION_ATTR)))
+                                .then("GradeAnswer"),
+
+                        // Grading is computation, not routing: it returns how close the answer was and
+                        // lets the switches below decide what that means.
+                        withInstanceId("GradeAnswer",
+                                (id, in) -> gradeGate(gameStore, riddleService, id),
+                                Object.class, RiddleState.class)
+                                .then("RiddleVerdict"),
+
+                        switchWhenOrElse("RiddleVerdict",
+                                (RiddleState s) -> s.solved(), "GateOpens", "RiddleRetryOrPenalty",
+                                RiddleState.class),
+
+                        switchWhenOrElse("RiddleRetryOrPenalty",
+                                (RiddleState s) -> s.attempt() >= riddleTries,
+                                "RiddlePenalty", "AwaitAnswer",
+                                RiddleState.class),
+
+                        withInstanceId("RiddlePenalty",
+                                (id, in) -> {
+                                    gameStore.clearRiddle(id);
+                                    return gameStore.enter(id, Narratives.RIDDLE_FAILED);
+                                }, Object.class)
+                                .then("Fork"),
+
+                        // Solved: forget the gate and walk through the door the player originally chose.
+                        withInstanceId("GateOpens",
+                                (id, s) -> {
+                                    gameStore.clearRiddle(id);
+                                    return s;
+                                }, RiddleState.class, RiddleState.class)
+                                .then("ThroughTheDoor"),
+
+                        switchCase("ThroughTheDoor",
+                                caseOf((RiddleState s) -> s.isLeft(), RiddleState.class).then("LeverRoom"),
+                                caseOf((RiddleState s) -> s.isRight(), RiddleState.class).then("TrapCorridor"),
                                 caseDefault("Fork")),
 
                         // === Lever Room: two-lever join ====================================
@@ -153,5 +226,51 @@ public class DungeonWorkflow extends Flow {
                                 (id, in) -> gameStore.enter(id, Narratives.TREASURE_ROOM), Object.class)
                                 .then(FlowDirectiveEnum.END))
                 .build();
+    }
+
+    /**
+     * Pose the gate's riddle and seed the {@link RiddleState} the workflow will route on. Publishes the
+     * riddle to the UI and records the gate view, but decides nothing.
+     */
+    private static RiddleState poseGate(
+            GameStore store, RiddleService riddles, String instanceId, String direction) {
+        store.enter(instanceId, Narratives.RIDDLE_GATE);
+        Riddle riddle = riddles.pose(direction, store.nextGateNumber(instanceId));
+        RiddleState state = RiddleState.pose(direction, riddle.id());
+        store.poseRiddle(instanceId, new RiddleView(
+                riddle.id(), riddle.prompt(), null, 0, riddles.maxAttempts(), 0.0, false, direction));
+        return state;
+    }
+
+    /**
+     * Grade the answer the player submitted for the gate currently posed. Returns the advanced state so
+     * the workflow's switches can decide whether the door opens, re-asks, or gives up - this method
+     * never makes that call itself (C-1).
+     */
+    private static RiddleState gradeGate(
+            GameStore store, RiddleService riddles, String instanceId) {
+        RiddleView posed = store.riddle(instanceId).orElse(null);
+        if (posed == null) {
+            // No gate on record - the only way here is a stray answer event, so treat it as a wrong
+            // attempt against nothing rather than faulting the instance.
+            return RiddleState.pose("left", "unknown").graded(false, 0.0);
+        }
+        Riddle riddle = Riddles.all().stream()
+                .filter(r -> r.id().equals(posed.riddleId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("unknown riddle " + posed.riddleId()));
+
+        String answer = store.pendingAnswer(instanceId);
+        RiddleState graded = riddles.grade(
+                new RiddleState(posed.direction(), posed.riddleId(), posed.attempt(), false,
+                        posed.proximity()),
+                riddle, answer);
+
+        // Hints escalate only after a failure, so the first attempt is unaided.
+        String hint = graded.solved() ? null : riddle.hintFor(graded.attempt());
+        store.gradeRiddle(instanceId, new RiddleView(
+                riddle.id(), riddle.prompt(), hint, graded.attempt(), riddles.maxAttempts(),
+                graded.proximity(), graded.solved(), graded.direction()));
+        return graded;
     }
 }

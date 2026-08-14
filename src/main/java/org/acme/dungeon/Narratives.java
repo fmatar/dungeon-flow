@@ -34,6 +34,22 @@ public final class Narratives {
                     + "entrance - choose faster this time.",
             false);
 
+    public static final GameView RIDDLE_GATE = new GameView(
+            Room.FORK,
+            "The passage narrows to a door of black stone. There is no handle. Carved into the "
+                    + "lintel, letters warm faintly as you read them - the door is listening.",
+            "A riddle gates this door. Answer it. Every wrong answer tells you only how close you "
+                    + "were - the engine is parked on a listen until you speak.",
+            false);
+
+    public static final GameView RIDDLE_FAILED = new GameView(
+            Room.FORK,
+            "The letters go dark and the stone forgets you. Something unseen turns you around, "
+                    + "firmly and without malice, and sets you back at the fork.",
+            "The gate exhausted its attempts, so a compensation returned you to the fork - the same "
+                    + "bounded-retry shape as the trap's lock, guarding a door instead of a lock.",
+            false);
+
     public static final GameView LEVER_ROOM = new GameView(
             Room.LEVER_ROOM,
             "Two great iron levers, A and B, flank a sealed gate. The mechanism will only release "

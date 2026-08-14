@@ -72,6 +72,10 @@ minutes.
 silence run five seconds. *"The engine is parked on an event wait. It's consuming nothing. It'll wait
 for an hour."*
 
+Then the **riddle gate**. Get it deliberately wrong once, on the projector, and let the room watch the
+thermometer climb from freezing to cool. That single gauge movement explains bounded retry better than
+any slide: the attempt cost something and earned something.
+
 Then the join: one lever, nothing. Let that sit too — people expect a reaction. Then the second lever.
 This is the beat people remember; don't rush it.
 

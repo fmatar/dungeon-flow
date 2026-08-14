@@ -49,8 +49,11 @@ Play deliberately:
 
 1. At the fork, **don't click anything.** The engine is parked on an event wait, consuming nothing,
    waiting for a human. Watch the torch ring drain.
-2. Go **left**, then pull **only lever A**. Nothing happens. That's a multi-event join *holding*.
-3. Pull **lever B**. The gate opens.
+2. Go **left**. A **riddle gate** stops you: the engine parks on another `listen`, and a wrong answer
+   tells you only *how warm* you were, on an animated thermometer. Get it wrong on purpose once to
+   watch the gauge move and a hint appear — that is a bounded retry you can feel.
+3. Answer it, then pull **only lever A**. Nothing happens. That's a multi-event join *holding*. Pull
+   **lever B** and the gate opens.
 4. In the Trap Corridor, watch the attempt counter. That's a bounded retry running server-side, with
    no click from you.
 
@@ -58,8 +61,9 @@ Then open [`src/main/java/org/acme/dungeon/DungeonWorkflow.java`](../../src/main
 The whole map is one file. `listen`, `switch`, `all(...)`, the retry loop — every behaviour you just
 felt is right there, and **no Java decides where the player goes**.
 
-✅ **Checkpoint** — one lever does nothing; two levers open the gate; you can point at the `all(...)`
-call that caused it.
+✅ **Checkpoint** — the riddle gate holds the door and the thermometer moves on a wrong answer; one
+lever does nothing; two levers open the gate; you can point at the `listen`, `switch` and `all(...)`
+calls that caused all three.
 
 > **Dev mode only:** that diagram does not exist in the container images. Remember this in module 4.
 

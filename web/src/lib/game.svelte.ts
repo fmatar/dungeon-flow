@@ -1,5 +1,5 @@
-import { choose, cleanup, pullLever, startGame, streamUrl } from './api';
-import type { GameView, Room, Status, StreamEvent } from './types';
+import { answerRiddle, choose, cleanup, pullLever, startGame, streamUrl } from './api';
+import type { GameView, RiddleView, Room, Status, StreamEvent, Temperature } from './types';
 
 export interface Attempt {
 	attempt: number;
@@ -29,6 +29,10 @@ export class Game {
 
 	leverA = $state(false);
 	leverB = $state(false);
+	/** The gate currently holding the player, or null when no door is asking a riddle. */
+	riddle = $state<RiddleView | null>(null);
+	/** True while an answer is in flight, so the form can disable itself. */
+	answering = $state(false);
 	attempts = $state<Attempt[]>([]);
 	forkEntries = $state(0); // bumps on each (re)entry to the fork -> restarts the torch timer
 	connected = $state(false);
@@ -48,6 +52,22 @@ export class Game {
 	}
 	get running(): boolean {
 		return this.id !== null;
+	}
+	/** True when a riddle gate is holding the player at a door. */
+	get gated(): boolean {
+		return this.riddle !== null && !this.riddle.solved;
+	}
+	/** Server-computed warmth band, so the UI never invents its own idea of "warm". */
+	get temperature(): Temperature {
+		const r = this.riddle;
+		if (!r) return 'FREEZING';
+		if (r.solved) return 'SOLVED';
+		if (r.proximity >= 0.75) return 'SCALDING';
+		if (r.proximity >= 0.55) return 'HOT';
+		if (r.proximity >= 0.4) return 'WARM';
+		if (r.proximity >= 0.25) return 'COOL';
+		if (r.proximity > 0) return 'COLD';
+		return 'FREEZING';
 	}
 
 	async start(): Promise<void> {
@@ -83,6 +103,11 @@ export class Game {
 	}
 
 	private onEvent(ev: StreamEvent): void {
+		if (ev.kind === 'riddle') {
+			// A gate was posed, or an answer was graded. Either way this frame IS the gate's state.
+			this.riddle = ev.riddle ?? null;
+			return;
+		}
 		if (ev.kind === 'attempt') {
 			if (ev.attempt != null) {
 				this.attempts = [...this.attempts, { attempt: ev.attempt, picked: !!ev.picked }];
@@ -91,6 +116,8 @@ export class Game {
 		}
 		if (ev.view) {
 			const room = ev.view.room;
+			// Leaving the fork means the gate is behind us — solved, or compensated away.
+			if (room !== 'FORK') this.riddle = null;
 			if (room !== 'LEVER_ROOM') {
 				this.leverA = false;
 				this.leverB = false;
@@ -108,6 +135,19 @@ export class Game {
 			await choose(this.id, direction);
 		} catch (e) {
 			this.error = String(e);
+		}
+	}
+
+	/** Submit one answer to the gate. Warmth and hints arrive back over SSE, not from this call. */
+	async answer(text: string): Promise<void> {
+		if (!this.id || this.answering) return;
+		this.answering = true;
+		try {
+			await answerRiddle(this.id, text);
+		} catch (e) {
+			this.error = String(e);
+		} finally {
+			this.answering = false;
 		}
 	}
 
@@ -141,6 +181,8 @@ export class Game {
 		this.status = null;
 		this.leverA = false;
 		this.leverB = false;
+		this.riddle = null;
+		this.answering = false;
 		this.attempts = [];
 		this.forkEntries = 0;
 		this.connected = false;
@@ -163,6 +205,18 @@ export class Game {
 				title: 'Terminal state reached',
 				blurb: 'The instance reached the Treasure Room and completed. In CNCF terms, this state is end: true.',
 				dsl: 'withInstanceId("TreasureRoom", …).then(END)'
+			};
+		}
+		if (this.gated) {
+			const r = this.riddle!;
+			return {
+				tag: '⏳ listen  +  🔁 retry',
+				title: r.attempt === 0 ? 'Parked on an event wait' : `Bounded retry  (${r.attempt}/${r.maxAttempts})`,
+				blurb:
+					r.attempt === 0
+						? 'The engine is holding on a listen for your answer. It consumes nothing while it waits — it would wait all day.'
+						: `Wrong answers do not fault the instance; they loop back to the same listen. On exhaustion a compensation returns you to the fork — the same shape as the trap's lock, guarding a door instead.`,
+				dsl: 'listen(toOne("game.riddle.answer")) → switch(solved?) → switch(attempt ≥ max ? compensate : listen)'
 			};
 		}
 		switch (this.room) {
