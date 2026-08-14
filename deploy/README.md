@@ -132,4 +132,5 @@ deploy/
 
 ---
 
-Root docs: [`../README.md`](../README.md) · UI: [`../web/README.md`](../web/README.md)
+Root docs: [`../README.md`](../README.md) · UI: [`../web/README.md`](../web/README.md) ·
+Hands-on lab: [`../docs/lab/LAB.md`](../docs/lab/LAB.md) (module 8 walks a deployment end to end)
