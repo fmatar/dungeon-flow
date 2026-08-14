@@ -41,6 +41,17 @@ export async function pullLever(id: string, which: 'a' | 'b'): Promise<void> {
 	await ok(await fetch(`${BASE}/${id}/lever-${which}`, { method: 'POST' }));
 }
 
+/** POST /dungeon/{id}/riddle - submit one answer to the gate currently holding the player. */
+export async function answerRiddle(id: string, answer: string): Promise<void> {
+	await ok(
+		await fetch(`${BASE}/${id}/riddle`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ answer })
+		})
+	);
+}
+
 /** GET /dungeon/{id} - inspect a session. */
 export async function inspect(id: string): Promise<StateResponse> {
 	const res = await ok(await fetch(`${BASE}/${id}`));

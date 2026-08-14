@@ -45,9 +45,63 @@ public class GameStore {
     // Hot event bus that fans room transitions and lock attempts out to any subscribed SSE stream.
     private final BroadcastProcessor<StreamEvent> bus = BroadcastProcessor.create();
 
+    // --- riddle gates -------------------------------------------------------------------------
+    // The riddle a gate is currently holding open, plus the answer most recently submitted for it.
+    // Both are read-model, not game logic: the workflow decides whether a graded answer opens the
+    // door by switching on the RiddleState that RiddleService returns (C-1).
+    private final Map<String, RiddleView> riddles = new ConcurrentHashMap<>();
+    private final Map<String, String> submitted = new ConcurrentHashMap<>();
+    // How many gates an instance has faced, so the riddle bank rotates within one session.
+    private final Map<String, Integer> gateCounts = new ConcurrentHashMap<>();
+
     /** Register a freshly started instance. Called by the HTTP layer right after start(). */
     public void register(WorkflowInstance instance) {
         instances.put(instance.id(), instance);
+    }
+
+    /** Record and broadcast the gate now holding this instance. */
+    public RiddleView poseRiddle(String instanceId, RiddleView view) {
+        riddles.put(instanceId, view);
+        submitted.remove(instanceId);
+        LOG.info("[{}] riddle posed ({}): {}", instanceId, view.riddleId(),
+                view.prompt().replaceAll("\\s+", " "));
+        bus.onNext(StreamEvent.riddle(instanceId, view));
+        return view;
+    }
+
+    /** Broadcast a graded attempt: same riddle, new proximity and attempt count. */
+    public RiddleView gradeRiddle(String instanceId, RiddleView view) {
+        riddles.put(instanceId, view);
+        submitted.remove(instanceId);
+        LOG.info("[{}] riddle attempt {} -> {} ({})", instanceId, view.attempt(),
+                view.solved() ? "SOLVED" : "wrong", view.temperature());
+        bus.onNext(StreamEvent.riddle(instanceId, view));
+        return view;
+    }
+
+    /** Forget the gate once the player is through it (or has been thrown back). */
+    public void clearRiddle(String instanceId) {
+        riddles.remove(instanceId);
+        submitted.remove(instanceId);
+    }
+
+    public Optional<RiddleView> riddle(String instanceId) {
+        return Optional.ofNullable(riddles.get(instanceId));
+    }
+
+    /** Stash the answer the player submitted, for the workflow's grading step to pick up. */
+    public void submitAnswer(String instanceId, String answer) {
+        submitted.put(instanceId, answer == null ? "" : answer);
+    }
+
+    /** The answer awaiting grading, or empty if the trigger arrived without one. */
+    public String pendingAnswer(String instanceId) {
+        return submitted.getOrDefault(instanceId, "");
+    }
+
+    /** Increment and return how many gates this instance has now faced (1-based). */
+    public int nextGateNumber(String instanceId) {
+        return gateCounts.merge(instanceId, 1, Integer::sum);
     }
 
     /**
@@ -81,12 +135,29 @@ public class GameStore {
      * player is), then every subsequent transition and lock attempt.
      */
     public Multi<StreamEvent> stream(String instanceId) {
-        Multi<StreamEvent> live = bus.filter(e -> instanceId.equals(e.instanceId()));
-        return view(instanceId)
-                .map(v -> Multi.createBy().concatenating().streams(
-                        Multi.createFrom().item(StreamEvent.state(instanceId, statusName(instanceId), v)),
-                        live))
-                .orElse(live);
+        // onOverflow().buffer(...) is load-bearing, not defensive. A riddle gate emits TWO frames
+        // back to back from one thread - the room state, then the posed riddle - and an unbuffered
+        // BroadcastProcessor fails the second with
+        //   BackPressureFailure: Could not emit item downstream due to lack of requests
+        // which kills the whole SSE stream. The symptom is a UI that silently stops updating, which
+        // reads as a routing bug rather than a transport one.
+        Multi<StreamEvent> live = bus
+                .filter(e -> instanceId.equals(e.instanceId()))
+                .onOverflow().buffer(256);
+
+        // Replay enough for a LATE subscriber (a page refresh, or a projector opened mid-game) to
+        // render the current situation: the room, and the gate holding it if there is one. Without
+        // the riddle frame a refresh mid-gate shows the gate's narrative with no way to answer.
+        List<StreamEvent> replay = new java.util.ArrayList<>(2);
+        view(instanceId).ifPresent(v ->
+                replay.add(StreamEvent.state(instanceId, statusName(instanceId), v)));
+        riddle(instanceId).ifPresent(r -> replay.add(StreamEvent.riddle(instanceId, r)));
+
+        if (replay.isEmpty()) {
+            return live;
+        }
+        return Multi.createBy().concatenating().streams(
+                Multi.createFrom().iterable(replay), live);
     }
 
     /** Current workflow status name for an instance, or RUNNING if it isn't registered yet. */
@@ -115,5 +186,8 @@ public class GameStore {
         instances.remove(instanceId);
         views.remove(instanceId);
         trails.remove(instanceId);
+        riddles.remove(instanceId);
+        submitted.remove(instanceId);
+        gateCounts.remove(instanceId);
     }
 }

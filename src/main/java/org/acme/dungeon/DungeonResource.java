@@ -79,8 +79,9 @@ public class DungeonResource {
     public record StartResponse(String instanceId, GameView entrance, long torchTimeoutSeconds) {
     }
 
+    /** {@code riddle} is null unless a gate is currently holding this instance. */
     @RegisterForReflection
-    public record StateResponse(String instanceId, String status, GameView view) {
+    public record StateResponse(String instanceId, String status, GameView view, RiddleView riddle) {
     }
 
     // === REQ-FUNC-001: start a game instance ================================================
@@ -150,6 +151,33 @@ public class DungeonResource {
         return Response.accepted().build();
     }
 
+    // === Riddle gates: answer the riddle holding a door =====================================
+
+    /**
+     * Submit one answer to the riddle currently gating this instance's chosen door.
+     *
+     * <p>The answer is stashed in the store <em>before</em> the CloudEvent fires, so the event stays a
+     * pure trigger (like the levers) and the workflow never parses an event payload. Returns
+     * {@code 409} when no gate is posed, which is a clearer signal to a client than silently
+     * publishing an event nothing is listening for.
+     */
+    @POST
+    @Path("/{id}/riddle")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response answerRiddle(@PathParam("id") String id, RiddleAnswer body) {
+        if (store.instance(id).isEmpty()) {
+            return notFound(id);
+        }
+        if (store.riddle(id).isEmpty()) {
+            return Response.status(Response.Status.CONFLICT)
+                    .entity(Map.of("error", "No riddle is currently gating instance " + id))
+                    .build();
+        }
+        store.submitAnswer(id, body == null ? "" : body.answer());
+        publish(id, GameEvents.RIDDLE_ANSWER, "{}".getBytes());
+        return Response.accepted().build();
+    }
+
     // === REQ-FUNC-007: inspect a session ====================================================
 
     @GET
@@ -165,7 +193,8 @@ public class DungeonResource {
         // Note: we return 200 with the victory view on completion so the player actually sees the win
         // (REQ-FUNC-006). Strict REQ-FUNC-007 "404 after completion" is a one-line change here if
         // preferred; see README > Design decisions.
-        return Response.ok(new StateResponse(id, status.name(), view)).build();
+        return Response.ok(new StateResponse(id, status.name(), view, store.riddle(id).orElse(null)))
+                .build();
     }
 
     // === REQ-FUNC-008/012 support: race view + cleanup ======================================
@@ -175,7 +204,8 @@ public class DungeonResource {
         List<StateResponse> out = new ArrayList<>();
         store.all().forEach((id, instance) ->
                 out.add(new StateResponse(id, instance.status().name(),
-                        store.view(id).orElse(Narratives.ENTRANCE))));
+                        store.view(id).orElse(Narratives.ENTRANCE),
+                        store.riddle(id).orElse(null))));
         return out;
     }
 

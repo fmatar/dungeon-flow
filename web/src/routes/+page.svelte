@@ -3,9 +3,50 @@
 	import RoomMap from '$lib/components/RoomMap.svelte';
 	import PrimitiveSpotlight from '$lib/components/PrimitiveSpotlight.svelte';
 	import TorchTimer from '$lib/components/TorchTimer.svelte';
+	import RiddleGate from '$lib/components/RiddleGate.svelte';
 	import { ROOM_LABEL } from '$lib/rooms';
+	import { dur, ease, gsap } from '$lib/motion';
 
 	const game = new Game();
+
+	// Room changes get a deliberate beat: the label wipes in, the narrative settles behind it. This is
+	// the app's core feedback — the engine moved you — so it should never be a silent text swap.
+	let roomLabel = $state<HTMLElement | null>(null);
+	let narrative = $state<HTMLParagraphElement | null>(null);
+
+	// One authored moment per room change: the label resolves as the narrative settles under it. They
+	// share a timeline so it reads as the room arriving, not as two elements animating near each other.
+	$effect(() => {
+		const room = game.room;
+		if (!room || !roomLabel) return;
+		const tl = gsap.timeline();
+		tl.fromTo(
+			roomLabel,
+			{ opacity: 0, letterSpacing: '0.55em' },
+			{ opacity: 1, letterSpacing: '0.2em', duration: dur.normal, ease: ease.settle }
+		);
+		if (narrative) {
+			tl.fromTo(
+				narrative,
+				{ opacity: 0, y: 5 },
+				{ opacity: 1, y: 0, duration: dur.normal, ease: ease.settle },
+				'-=0.34'
+			);
+		}
+		return () => tl.kill();
+	});
+
+	// Victory is the run's payoff and the only overshoot in the app.
+	let victoryBanner = $state<HTMLElement | null>(null);
+	$effect(() => {
+		if (!game.done || !victoryBanner) return;
+		const tl = gsap.fromTo(
+			victoryBanner,
+			{ scale: 0.96, opacity: 0 },
+			{ scale: 1, opacity: 1, duration: dur.normal, ease: ease.snap }
+		);
+		return () => tl.kill();
+	});
 </script>
 
 <div class="grid gap-4 lg:grid-cols-2">
@@ -40,17 +81,23 @@
 					{game.busy ? 'starting…' : '▶ start a new game'}
 				</button>
 			{:else if game.view}
-				<div class="text-xs uppercase tracking-widest text-primary-500 text-glow">
+				<div
+					bind:this={roomLabel}
+					class="text-xs uppercase tracking-widest text-primary-500 text-glow"
+				>
 					{ROOM_LABEL[game.view.room]}
 				</div>
 				{#key game.view.narrative}
-					<p class="mt-3 leading-relaxed text-surface-100 line-in">{game.view.narrative}</p>
+					<p bind:this={narrative} class="mt-3 leading-relaxed text-surface-100">
+						{game.view.narrative}
+					</p>
 				{/key}
 				<p class="mt-3 text-sm text-surface-400">// {game.view.hint}</p>
 
 				<div class="mt-7">
 					{#if game.done}
 						<div
+							bind:this={victoryBanner}
 							class="rounded border border-primary-500 bg-primary-500/10 p-4 text-primary-300 text-glow"
 						>
 							✦ Victory — you cleared the dungeon. This instance is complete.
@@ -58,6 +105,10 @@
 						<button class="btn preset-filled-primary-500 mt-4" onclick={() => game.start()}>
 							▶ play again
 						</button>
+					{:else if game.gated}
+						<!-- The gate owns the interaction while it holds the door; the fork buttons
+						     would be a lie here, because the direction is already chosen. -->
+						<RiddleGate {game} />
 					{:else if game.room === 'FORK'}
 						<div class="flex flex-wrap items-center gap-5">
 							<div class="flex gap-2">

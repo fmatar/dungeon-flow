@@ -480,6 +480,59 @@ info "instance $ID"
 
 curl -s -X POST "$BASE/api/dungeon/$ID/choice" \
      -H 'Content-Type: application/json' -d '{"direction":"left"}' -o /dev/null
+
+# Every door is now gated by a riddle, so the smoke test has to answer one. The gate is posed
+# asynchronously and its listen is armed a moment later, so poll for the riddle AND for the instance
+# to be WAITING before answering - firing early means nothing is listening and the event is dropped.
+RIDDLE_ID=""
+DEADLINE=$((SECONDS + 20))
+while [[ $SECONDS -lt $DEADLINE ]]; do
+    BODY=$(curl -s "$BASE/api/dungeon/$ID" || true)
+    RIDDLE_ID=$(printf '%s' "$BODY" | extract riddleId)
+    STATUS=$(printf '%s' "$BODY" | extract status)
+    [[ -n $RIDDLE_ID && $STATUS == WAITING ]] && break
+    sleep 1
+done
+
+if [[ -z $RIDDLE_ID ]]; then
+    die "no riddle gate appeared after choosing a direction - the gate is not posing."
+fi
+info "gate posed riddle '$RIDDLE_ID'"
+
+# Known-correct answers, keyed by riddle id. If the bank changes and an id is missing here, the run
+# still verifies the gate (a graded wrong answer proves listen + switch + retry) rather than failing.
+riddle_answer() {
+    case $1 in
+        left-echo)       echo "an echo" ;;
+        left-tomorrow)   echo "tomorrow" ;;
+        left-silence)    echo "silence" ;;
+        right-keyboard)  echo "a keyboard" ;;
+        right-shadow)    echo "a shadow" ;;
+        right-lock)      echo "a lock" ;;
+        *)               echo "" ;;
+    esac
+}
+ANSWER=$(riddle_answer "$RIDDLE_ID")
+
+if [[ -z $ANSWER ]]; then
+    warn "no known answer for riddle '$RIDDLE_ID' - verifying the gate grades a wrong answer instead"
+    curl -s -X POST "$BASE/api/dungeon/$ID/riddle" \
+         -H 'Content-Type: application/json' -d '{"answer":"deliberately wrong"}' -o /dev/null
+    sleep 3
+    GRADED=$(curl -s "$BASE/api/dungeon/$ID" | extract temperature)
+    [[ -n $GRADED ]] || die "the gate did not grade an answer."
+    info "gate graded a wrong answer ($GRADED) - the riddle primitive is live"
+    printf '\n%s%s Dungeon Flow is running%s\n' "$BOLD" "$GRN" "$RST"
+    printf '   Play:  %shttp://localhost:%s%s\n\n' "$BOLD" "$EFFECTIVE_PORT" "$RST"
+    exit 0
+fi
+
+curl -s -X POST "$BASE/api/dungeon/$ID/riddle" \
+     -H 'Content-Type: application/json' -d "{\"answer\":\"$ANSWER\"}" -o /dev/null
+info "answered the gate: '$ANSWER'"
+
+# Through the gate, the Lever Room's join is next.
+sleep 2
 curl -s -X POST "$BASE/api/dungeon/$ID/lever-a" -o /dev/null
 curl -s -X POST "$BASE/api/dungeon/$ID/lever-b" -o /dev/null
 

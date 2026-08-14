@@ -12,16 +12,17 @@ torch. You watch the engine drive the game, then open one file and see exactly w
 produced what you just felt.
 
 ```
- Entrance ─▶ Fork ──(left)──▶ Lever Room ──(pull A & B)──▶ Trap Corridor ──(pick lock)──▶ Treasure ✦END
-              │  \─(right)────────────────────────────────▶ Trap Corridor
-              │  \─(unknown, or torch times out)──────────▶ respawn
-              ▲                                                    │
-              └───────────────── respawn on retry exhaustion ──────┘
+ Entrance ─▶ Fork ─(left)─▶ ⛬ Riddle ─▶ Lever Room ─(A & B)─▶ Trap Corridor ─(pick)─▶ Treasure ✦END
+              │  \─(right)──▶ ⛬ Riddle ────────────────────▶ Trap Corridor
+              │  \─(unknown, or torch times out)───────────▶ respawn
+              ▲                    │                                  │
+              └── gate gives up ───┘── respawn on retry exhaustion ───┘
 ```
 
 | Room | Workflow primitive | What you experience |
 |---|---|---|
 | **Fork** | `listen` (event wait) + `switch` (data routing) + `timeout` | The game pauses, waiting for *you*. Dawdle and your torch dies. |
+| **Riddle gate** | `listen` + `switch` + bounded **retry** + **compensation** | Every door asks a riddle. Wrong answers tell you only *how warm* you were; three and it turns you back. |
 | **Lever Room** | `listen … all(A, B)` — multi-event **join** | Pull one lever: nothing. Pull both, any order: the gate opens. |
 | **Trap Corridor** | bounded **retry** + **compensation** | The lock jams at random. Three failures and a trap flings you back. |
 | **Treasure Room** | terminal state (`end`) | `victory: true`, instance `COMPLETED`. |
@@ -250,14 +251,20 @@ ID=<paste instanceId>
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/choice \
      -H 'Content-Type: application/json' -d '{"direction":"left"}'
 
-# 3) LEFT — the Lever Room. Pull ONE lever and inspect: nothing has moved (the join is holding)
+# 3) A riddle now gates the door. Inspect to read it, then answer it.
+curl -s http://localhost:8080/api/dungeon/$ID | jq '.riddle.prompt, .riddle.maxAttempts'
+curl -s -XPOST http://localhost:8080/api/dungeon/$ID/riddle \
+     -H 'Content-Type: application/json' -d '{"answer":"an echo"}'
+#   Wrong? Inspect again: .riddle.proximity is how warm you were, and a hint appears.
+
+# 4) Through the gate — the Lever Room. Pull ONE lever and inspect: nothing has moved (the join holds)
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-a
 curl -s http://localhost:8080/api/dungeon/$ID | jq '.view.room, .status'
 
 # ...now the second lever. The gate opens and the Trap Corridor picks the lock by itself
 curl -s -XPOST http://localhost:8080/api/dungeon/$ID/lever-b
 
-# 4) Where am I?
+# 5) Where am I?
 curl -s http://localhost:8080/api/dungeon/$ID | jq
 
 # Watch transitions live (SSE), including server-side retries and respawns
@@ -282,6 +289,7 @@ In [`application.properties`](src/main/resources/application.properties) — gam
 | `dungeon.lock.success-probability` | `0.5` | Per-attempt chance the lock opens |
 | `dungeon.lock.mode` | `RANDOM` | `RANDOM` \| `ALWAYS_SUCCEED` \| `ALWAYS_JAM` — force outcomes for demos |
 | `dungeon.trap.max-attempts` | `3` | Retries before the respawn compensation |
+| `dungeon.riddle.max-attempts` | `3` | Riddle attempts before the gate turns you back |
 | `dungeon.fork.torch-timeout` | `PT60S` | Idle time at the fork before respawn (ISO-8601) |
 
 ---
@@ -294,6 +302,7 @@ All endpoints are under `/api` (`quarkus.rest.path=/api`), leaving `/` free for 
 |---|---|
 | `POST /api/dungeon` | Start a session → `instanceId` + entrance view + torch timeout |
 | `POST /api/dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice |
+| `POST /api/dungeon/{id}/riddle` `{"answer":"…"}` | Answer the riddle gating a door. `409` if no gate is posed |
 | `POST /api/dungeon/{id}/lever-a` · `POST /api/dungeon/{id}/lever-b` | Pull a lever |
 | `GET /api/dungeon/{id}` | Inspect current room, narrative and status |
 | `GET /api/dungeon/{id}/stream` | **SSE** stream of room transitions + lock attempts |
@@ -581,6 +590,12 @@ For a room full of people playing at once, open `/race` on the projector instead
   Fixing asset URLs alone is *not* enough — SvelteKit compiles `base` into the client bundle, and a
   stale `''` makes its router reject the very first URL and render nothing. Full explanation in
   [`deploy/datarobot/README.md`](deploy/datarobot/README.md).
+- **Riddle gates reuse the trap's shape.** A gate is a `listen` for the answer, a `switch` on the
+  graded result, and a compensation when attempts run out — deliberately the same primitives as the
+  Trap Corridor's lock, so an audience sees one shape guard two unrelated fictions.
+  [`RiddleService`](src/main/java/org/acme/dungeon/RiddleService.java) only scores *how close* an
+  answer was; it never decides whether the door opens. Proximity blends edit distance with token
+  overlap so a right idea always reads warm, and drives the animated thermometer in the UI.
 - **Completion is visible.** `GET /api/dungeon/{id}` returns `200` with the victory view after an
   instance completes, so the player actually sees the win, and `404` only for an unknown id.
 

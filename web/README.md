@@ -10,6 +10,7 @@ Its job isn't "click instead of curl". It's to make the invisible workflow primi
 | `listen` with a `timeout` | a **torch ring** draining in real time |
 | multi-event **join** | two levers, lighting one at a time, held at `1/2` |
 | bounded **retry** | an animated attempt counter, ticking as the engine retries |
+| a riddle gate holding a door | an **animated thermometer** — how warm your last answer was |
 | whichever construct is live | a **primitive spotlight** naming it, with the DSL snippet |
 
 That spotlight is the teaching payload — see [`game.svelte.ts`](src/lib/game.svelte.ts).
@@ -148,7 +149,8 @@ Mechanism in full: [`deploy/datarobot/README.md`](../deploy/datarobot/README.md)
 | [`src/lib/game.svelte.ts`](src/lib/game.svelte.ts) | A Svelte 5 runes class holding one session's live state: subscribes to SSE, tracks lever/attempt state, derives the primitive spotlight |
 | [`src/lib/types.ts`](src/lib/types.ts) | Shapes mirrored from the Java records — keep in sync with `org.acme.dungeon` |
 | [`src/lib/rooms.ts`](src/lib/rooms.ts) | Room order, labels and glyphs for the map and race track |
-| [`src/lib/components/`](src/lib/components/) | `RoomMap`, `PrimitiveSpotlight`, `TorchTimer` (custom SVG ring) |
+| [`src/lib/components/`](src/lib/components/) | `RoomMap`, `PrimitiveSpotlight`, `TorchTimer`, `RiddleGate`, `Thermometer` |
+| [`src/lib/motion.ts`](src/lib/motion.ts) | GSAP setup: house easings, durations, and the single place `prefers-reduced-motion` is honoured |
 | [`src/routes/+layout.ts`](src/routes/+layout.ts) | `ssr = false`, `prerender = false` — a pure client-side SPA |
 
 **Lever state is optimistic on the client.** Only this browser pulls this instance's levers, so the
@@ -180,6 +182,28 @@ rewrite deliberately excludes any path containing a dot, so a missing `/_app/foo
 honestly instead of returning HTML — a mis-signal that is painful to debug in a browser.
 
 ---
+
+## Motion
+
+Animation is [GSAP](https://gsap.com), always through [`motion.ts`](src/lib/motion.ts) so easings,
+durations and `prefers-reduced-motion` live in one place — with reduced motion every tween collapses
+to an instant set, and callbacks still fire so component logic is unaffected.
+
+The rule is **one authored moment per surface**, not scattered effects:
+
+| Surface | The moment | Why |
+|---|---|---|
+| Room change | label resolves as the narrative settles under it | "the engine moved you" is the app's core feedback |
+| Riddle gate | the panel resolves out of blur | the carving coming into focus |
+| Thermometer | the column fills, colour and readout riding the same timeline | it must read as one physical event |
+| Wrong answer | the field shakes once | information, not decoration: the gauge says *how close*, this says *not yet* |
+| Victory | a single overshoot | the run's payoff, and the only overshoot in the app |
+
+The thermometer takes its **colour from the server's temperature band** and only its height from
+proximity. Re-deriving bands client-side would create a second source of truth that drifts the first
+time a threshold moves. The ramp stays inside the phosphor palette (`--heat-0` … `--heat-6` in
+[`app.css`](src/app.css)): on a CRT, hotter reads as brighter and amber-shifted, and a blue mercury
+column in a green terminal looks like a different application.
 
 ## Theming
 
