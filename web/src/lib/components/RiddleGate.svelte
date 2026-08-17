@@ -95,7 +95,9 @@
 						disabled={submitting || riddle.solved}
 						aria-describedby="riddle-feedback"
 						placeholder="speak your answer…"
-						class="input min-w-0 flex-1 border-surface-700 bg-black/50 text-sm"
+						class="input min-w-0 flex-1 border-surface-600 bg-surface-800 text-sm text-surface-50
+							caret-primary-400 placeholder:text-surface-300
+							focus:border-primary-500 disabled:opacity-60"
 					/>
 					<button
 						type="submit"
