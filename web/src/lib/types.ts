@@ -18,10 +18,18 @@ export interface GameView {
 	victory: boolean;
 }
 
+export interface PlayerStats {
+	strength: number;
+	dexterity: number;
+	intellect: number;
+}
+
 export interface StartResponse {
 	instanceId: string;
 	entrance: GameView;
 	torchTimeoutSeconds: number;
+	playerClass: string;
+	stats: PlayerStats;
 }
 
 export interface StateResponse {
@@ -30,6 +38,8 @@ export interface StateResponse {
 	view: GameView;
 	/** Present only while a riddle gate is holding this instance. */
 	riddle?: RiddleView | null;
+	playerClass?: string;
+	stats?: PlayerStats;
 }
 
 /** Coarse warmth bands, computed server-side so every client agrees what "warm" means. */

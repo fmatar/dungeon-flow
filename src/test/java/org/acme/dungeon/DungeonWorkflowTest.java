@@ -59,15 +59,34 @@ class DungeonWorkflowTest {
     }
 
     private WorkflowInstance startAndArm() {
-        WorkflowInstance instance = dungeon.instance(Map.of());
-        store.register(instance);
+        return startAndArm("balanced");
+    }
+
+    private WorkflowInstance startAndArm(String playerClass) {
+        String pClass = playerClass.toLowerCase();
+        PlayerStats stats = PlayerStats.of(pClass);
+        WorkflowInstance instance = dungeon.instance(Map.of(
+            "playerClass", pClass,
+            "stats", stats
+        ));
+        store.register(instance, pClass, stats);
         instance.start();
         await().atMost(ofSeconds(5)).until(() -> instance.status() == WorkflowStatus.WAITING);
         return instance;
     }
 
     private void awaitStatus(WorkflowInstance instance, WorkflowStatus status) {
-        await().atMost(ofSeconds(10)).until(() -> instance.status() == status);
+        awaitStatus(instance, status, 10);
+    }
+
+    /**
+     * Longer budget for tests that drive many instances at once. Each door now costs an extra
+     * round-trip through its riddle gate, so ten concurrent players take materially longer than they
+     * did before the gates existed - and under full-suite contention 10s is no longer enough. This
+     * test asserts ISOLATION, not speed, so waiting longer does not weaken it.
+     */
+    private void awaitStatus(WorkflowInstance instance, WorkflowStatus status, int seconds) {
+        await().atMost(ofSeconds(seconds)).until(() -> instance.status() == status);
     }
 
     private void awaitRoom(WorkflowInstance instance, Room room) {
@@ -384,7 +403,7 @@ class DungeonWorkflowTest {
         // Advance only the first player to victory.
         WorkflowInstance first = instances.getFirst();
         player.choiceAndSolve(first.id(), "right");
-        awaitStatus(first, WorkflowStatus.COMPLETED);
+        awaitStatus(first, WorkflowStatus.COMPLETED, 30);
 
         // Every other instance must still be waiting at the fork - unaffected by the first's move.
         instances.stream().skip(1).forEach(other -> {
@@ -394,6 +413,48 @@ class DungeonWorkflowTest {
 
         // And each can finish independently.
         instances.stream().skip(1).forEach(other -> player.choiceAndSolve(other.id(), "right"));
-        instances.stream().skip(1).forEach(other -> awaitStatus(other, WorkflowStatus.COMPLETED));
+        instances.stream().skip(1).forEach(other -> awaitStatus(other, WorkflowStatus.COMPLETED, 45));
+    }
+
+    // === Class-based Switch Tests ==========================================================
+
+    @Test
+    @DisplayName("Warrior with high Strength bashes the left gate open, bypassing the riddle")
+    void warrior_bashes_gate() {
+        WorkflowInstance instance = startAndArm("warrior");
+
+        player.choice(instance.id(), "left");
+
+        // Bypasses the riddle and goes directly to the Lever Room
+        awaitRoom(instance, Room.LEVER_ROOM);
+        assertThat(store.view(instance.id())).map(GameView::narrative)
+                .hasValueSatisfying(n -> assertThat(n).contains("shatter the stone gate with brute force"));
+    }
+
+    @Test
+    @DisplayName("Rogue with high Dexterity picks the lock on the first try with 100% success")
+    void rogue_lockpicks_perfectly() {
+        lockService.forceMode(LockService.Mode.ALWAYS_JAM); // usually jams, but Rogue overrides it
+        WorkflowInstance instance = startAndArm("rogue");
+
+        player.choiceAndSolve(instance.id(), "right");
+
+        awaitStatus(instance, WorkflowStatus.COMPLETED);
+        assertThat(store.view(instance.id())).map(GameView::room).hasValue(Room.TREASURE_ROOM);
+    }
+
+    @Test
+    @DisplayName("Mage with high Intellect solves the riddle even with a near-miss answer")
+    void mage_insight_solves_near_miss() {
+        WorkflowInstance instance = startAndArm("mage");
+        player.choice(instance.id(), "left");
+        RiddleView posed = player.awaitGate(instance.id());
+        String canonical = player.canonicalAnswerFor(posed.riddleId());
+        String nearMiss = canonical.substring(0, Math.max(1, canonical.length() - 1)) + "x";
+
+        player.answerWhenArmed(instance.id(), nearMiss);
+
+        // Near-miss resolves to solved for Mage
+        awaitRoom(instance, Room.LEVER_ROOM);
     }
 }

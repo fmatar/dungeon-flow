@@ -74,6 +74,14 @@ public final class Narratives {
                     + "again, or take the other path.",
             false);
 
+    public static final GameView BASH_GATE = new GameView(
+            Room.LEVER_ROOM,
+            "You step up to the door of black stone. Instead of solving a riddle, you brace your "
+                    + "shoulders and shatter the stone gate with brute force! It collapses in a pile of rubble. "
+                    + "Beyond it lies the Lever Room.",
+            "Your Warrior strength allowed you to bash the gate open, bypassing the riddle entirely!",
+            false);
+
     public static final GameView TREASURE_ROOM = new GameView(
             Room.TREASURE_ROOM,
             "The final door swings wide. Gold catches your torchlight - the Treasure Room, and it "

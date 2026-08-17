@@ -8,6 +8,7 @@
 	import { dur, ease, gsap } from '$lib/motion';
 
 	const game = new Game();
+	let selectedClass = $state('warrior');
 
 	// Room changes get a deliberate beat: the label wipes in, the narrative settles behind it. This is
 	// the app's core feedback — the engine moved you — so it should never be a silent text swap.
@@ -70,22 +71,81 @@
 			{#if !game.running}
 				<p class="leading-relaxed text-surface-400">
 					A containerized dungeon whose map <span class="text-primary-400">is</span> a running
-					workflow. Start a game and watch each engine primitive happen — an event wait, a switch, a
-					join, a retry, a timeout.
+					workflow. Select your character class to modify your stats and unlock special paths:
 				</p>
+				
+				<!-- Class Selection Grid -->
+				<div class="grid gap-3 sm:grid-cols-3 mt-4">
+					<button
+						class="card p-3 border text-left flex flex-col justify-between transition-all {selectedClass === 'warrior' ? 'border-primary-500 bg-primary-500/5' : 'border-surface-800 bg-black/25 opacity-70 hover:opacity-100'}"
+						onclick={() => selectedClass = 'warrior'}
+					>
+						<div>
+							<div class="text-sm font-bold text-surface-100 uppercase">🛡️ Warrior</div>
+							<div class="text-xs text-surface-400 mt-1 leading-normal">
+								STR: 18 | DEX: 10 | INT: 8
+							</div>
+						</div>
+						<div class="text-[10px] text-primary-400/80 mt-3 font-sans leading-snug">
+							★ Bypasses Riddle Gates using Strength
+						</div>
+					</button>
+
+					<button
+						class="card p-3 border text-left flex flex-col justify-between transition-all {selectedClass === 'mage' ? 'border-primary-500 bg-primary-500/5' : 'border-surface-800 bg-black/25 opacity-70 hover:opacity-100'}"
+						onclick={() => selectedClass = 'mage'}
+					>
+						<div>
+							<div class="text-sm font-bold text-surface-100 uppercase">🔮 Mage</div>
+							<div class="text-xs text-surface-400 mt-1 leading-normal">
+								STR: 8 | DEX: 10 | INT: 18
+							</div>
+						</div>
+						<div class="text-[10px] text-primary-400/80 mt-3 font-sans leading-snug">
+							★ Solves riddles with near-miss answers
+						</div>
+					</button>
+
+					<button
+						class="card p-3 border text-left flex flex-col justify-between transition-all {selectedClass === 'rogue' ? 'border-primary-500 bg-primary-500/5' : 'border-surface-800 bg-black/25 opacity-70 hover:opacity-100'}"
+						onclick={() => selectedClass = 'rogue'}
+					>
+						<div>
+							<div class="text-sm font-bold text-surface-100 uppercase">🗡️ Rogue</div>
+							<div class="text-xs text-surface-400 mt-1 leading-normal">
+								STR: 10 | DEX: 18 | INT: 8
+							</div>
+						</div>
+						<div class="text-[10px] text-primary-400/80 mt-3 font-sans leading-snug">
+							★ 100% lockpick rate, bypassing traps
+						</div>
+					</button>
+				</div>
+
 				<button
-					class="btn preset-filled-primary-500 mt-6"
-					onclick={() => game.start()}
+					class="btn preset-filled-primary-500 mt-6 w-full sm:w-auto"
+					onclick={() => game.start(selectedClass)}
 					disabled={game.busy}
 				>
-					{game.busy ? 'starting…' : '▶ start a new game'}
+					{game.busy ? 'starting…' : `▶ start game as ${selectedClass.toUpperCase()}`}
 				</button>
 			{:else if game.view}
-				<div
-					bind:this={roomLabel}
-					class="text-xs uppercase tracking-widest text-primary-500 text-glow"
-				>
-					{ROOM_LABEL[game.view.room]}
+				<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-surface-800/40 pb-3 mb-3">
+					<div
+						bind:this={roomLabel}
+						class="text-xs uppercase tracking-widest text-primary-500 text-glow"
+					>
+						{ROOM_LABEL[game.view.room]}
+					</div>
+					{#if game.stats}
+						<div class="flex flex-wrap items-center gap-2 text-[10px] sm:text-xs border border-surface-800 px-3 py-1 rounded bg-surface-950/40 text-surface-300">
+							<span class="uppercase font-bold text-primary-400">{game.playerClass}</span>
+							<span class="text-surface-700">|</span>
+							<span>💪 STR: <span class="text-glow text-surface-100">{game.stats.strength}</span></span>
+							<span>🎯 DEX: <span class="text-glow text-surface-100">{game.stats.dexterity}</span></span>
+							<span>🧠 INT: <span class="text-glow text-surface-100">{game.stats.intellect}</span></span>
+						</div>
+					{/if}
 				</div>
 				{#key game.view.narrative}
 					<p bind:this={narrative} class="mt-3 leading-relaxed text-surface-100">
@@ -102,7 +162,7 @@
 						>
 							✦ Victory — you cleared the dungeon. This instance is complete.
 						</div>
-						<button class="btn preset-filled-primary-500 mt-4" onclick={() => game.start()}>
+						<button class="btn preset-filled-primary-500 mt-4" onclick={() => game.start(selectedClass)}>
 							▶ play again
 						</button>
 					{:else if game.gated}

@@ -53,10 +53,26 @@ public class GameStore {
     private final Map<String, String> submitted = new ConcurrentHashMap<>();
     // How many gates an instance has faced, so the riddle bank rotates within one session.
     private final Map<String, Integer> gateCounts = new ConcurrentHashMap<>();
+    private final Map<String, String> playerClasses = new ConcurrentHashMap<>();
+    private final Map<String, PlayerStats> playerStats = new ConcurrentHashMap<>();
 
     /** Register a freshly started instance. Called by the HTTP layer right after start(). */
     public void register(WorkflowInstance instance) {
+        register(instance, "balanced", PlayerStats.of("balanced"));
+    }
+
+    public void register(WorkflowInstance instance, String playerClass, PlayerStats stats) {
         instances.put(instance.id(), instance);
+        playerClasses.put(instance.id(), playerClass);
+        playerStats.put(instance.id(), stats);
+    }
+
+    public String playerClass(String instanceId) {
+        return playerClasses.getOrDefault(instanceId, "balanced");
+    }
+
+    public PlayerStats stats(String instanceId) {
+        return playerStats.getOrDefault(instanceId, PlayerStats.of("balanced"));
     }
 
     /** Record and broadcast the gate now holding this instance. */
@@ -83,6 +99,7 @@ public class GameStore {
     public void clearRiddle(String instanceId) {
         riddles.remove(instanceId);
         submitted.remove(instanceId);
+        bus.onNext(StreamEvent.riddle(instanceId, null));
     }
 
     public Optional<RiddleView> riddle(String instanceId) {
@@ -189,5 +206,7 @@ public class GameStore {
         riddles.remove(instanceId);
         submitted.remove(instanceId);
         gateCounts.remove(instanceId);
+        playerClasses.remove(instanceId);
+        playerStats.remove(instanceId);
     }
 }

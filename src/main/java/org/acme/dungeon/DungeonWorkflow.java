@@ -50,7 +50,9 @@ import jakarta.inject.Inject;
     StreamEvent.class,
     RiddleState.class,
     RiddleView.class,
-    RiddleAnswer.class
+    RiddleAnswer.class,
+    WorkflowContext.class,
+    PlayerStats.class
 })
 @ApplicationScoped
 public class DungeonWorkflow extends Flow {
@@ -119,9 +121,26 @@ public class DungeonWorkflow extends Flow {
                         // directions go to the SAME gate - the direction travels in the RiddleState
                         // that PoseRiddle emits, so one gate serves both doors.
                         switchCase("WhichWay",
-                                caseOf((PlayerMove m) -> m.isLeft(), PlayerMove.class).then("PoseRiddleLeft"),
+                                caseOf((PlayerMove m) -> m.isLeft(), PlayerMove.class).then("CheckLeftGateType"),
                                 caseOf((PlayerMove m) -> m.isRight(), PlayerMove.class).then("PoseRiddleRight"),
                                 caseDefault("Fork")),
+
+                        withInstanceId("CheckLeftGateType",
+                                (id, in) -> {
+                                    PlayerStats stats = gameStore.stats(id);
+                                    return (stats != null && stats.strength() >= 12) ? "warrior" : "normal";
+                                },
+                                Object.class, String.class)
+                                .then("LeftGateDecision"),
+
+                        switchCase("LeftGateDecision",
+                                caseOf((String type) -> "warrior".equals(type), String.class).then("BashLeftGate"),
+                                caseOf((String type) -> "normal".equals(type), String.class).then("PoseRiddleLeft"),
+                                caseDefault("PoseRiddleLeft")),
+
+                        withInstanceId("BashLeftGate",
+                                (id, in) -> gameStore.enter(id, Narratives.BASH_GATE), Object.class)
+                                .then("WaitLevers"),
 
                         // === Riddle gate: listen + bounded retry + compensation ==============
                         // Every door is gated by a riddle. The shape is deliberately the same as the
@@ -204,7 +223,11 @@ public class DungeonWorkflow extends Flow {
                                 .then("PickLock"),
 
                         withInstanceId("PickLock",
-                                (id, s) -> gameStore.attempt(id, s.nextAttempt(locks.tryPick())),
+                                (id, s) -> {
+                                    PlayerStats stats = gameStore.stats(id);
+                                    boolean picked = (stats != null && stats.dexterity() >= 12) || locks.tryPick();
+                                    return gameStore.attempt(id, s.nextAttempt(picked));
+                                },
                                 LockState.class, LockState.class)
                                 .then("Picked"),
 
@@ -266,11 +289,20 @@ public class DungeonWorkflow extends Flow {
                         posed.proximity()),
                 riddle, answer);
 
+        boolean solved = graded.solved();
+        PlayerStats stats = store.stats(instanceId);
+        if (stats != null && stats.intellect() >= 12 && graded.proximity() >= 0.5) {
+            solved = true;
+        }
+
+        RiddleState finalState = new RiddleState(
+                graded.direction(), graded.riddleId(), graded.attempt(), solved, graded.proximity());
+
         // Hints escalate only after a failure, so the first attempt is unaided.
-        String hint = graded.solved() ? null : riddle.hintFor(graded.attempt());
+        String hint = solved ? (graded.solved() ? null : "Mage Insight: Your high Intellect allowed you to solve the riddle with a near-miss!") : riddle.hintFor(finalState.attempt());
         store.gradeRiddle(instanceId, new RiddleView(
-                riddle.id(), riddle.prompt(), hint, graded.attempt(), riddles.maxAttempts(),
-                graded.proximity(), graded.solved(), graded.direction()));
-        return graded;
+                riddle.id(), riddle.prompt(), hint, finalState.attempt(), riddles.maxAttempts(),
+                finalState.proximity(), solved, finalState.direction()));
+        return finalState;
     }
 }

@@ -567,7 +567,7 @@ For a room full of people playing at once, open `/race` on the projector instead
                         └──────────────────────────────────────────┘
 ```
 
-- **Engine:** Quarkus Flow `0.15.1` on Quarkus platform `3.38.1`, Java 25. The platform is pinned
+- **Engine:** Quarkus Flow `0.15.1` on Quarkus platform `3.38.2`, Java 25. The platform is pinned
   deliberately.
 - **No game logic in Java.** Routing, joins, retries and timeouts live *only* in the workflow
   definition. `GameStore` projects state for display; `LockService` answers "did the pick succeed?".
