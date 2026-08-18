@@ -72,9 +72,17 @@ minutes.
 silence run five seconds. *"The engine is parked on an event wait. It's consuming nothing. It'll wait
 for an hour."*
 
+**Tell the room to pick `balanced` or `mage`, not warrior.** A warrior bashes the left gate open and
+skips the riddle entirely — which is a great reveal *later* and a confusing start if half the room
+silently takes a different path than you.
+
 Then the **riddle gate**. Get it deliberately wrong once, on the projector, and let the room watch the
 thermometer climb from freezing to cool. That single gauge movement explains bounded retry better than
 any slide: the attempt cost something and earned something.
+
+Then, if you have a minute, replay as a **warrior** and go left: no riddle, the gate is bashed. Same
+workflow, different route, decided by a `switchCase` on a stat. It lands the "routing lives in the
+workflow" point better than any slide.
 
 Then the join: one lever, nothing. Let that sit too — people expect a reaction. Then the second lever.
 This is the beat people remember; don't rush it.

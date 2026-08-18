@@ -11,6 +11,7 @@ Its job isn't "click instead of curl". It's to make the invisible workflow primi
 | multi-event **join** | two levers, lighting one at a time, held at `1/2` |
 | bounded **retry** | an animated attempt counter, ticking as the engine retries |
 | a riddle gate holding a door | an **animated thermometer** — how warm your last answer was |
+| a class bypassing a gate | the gate never appears — the narrative says why instead |
 | whichever construct is live | a **primitive spotlight** naming it, with the DSL snippet |
 
 That spotlight is the teaching payload — see [`game.svelte.ts`](src/lib/game.svelte.ts).
@@ -67,7 +68,7 @@ pnpm preview        # serve the production build locally
 
 ## Routes
 
-- **`/`** — split screen. Left: the terminal you play in (narrative + contextual actions). Right: the
+- **`/`** — starts on a **class-selection screen** (warrior / rogue / mage), then a split screen. Left: the terminal you play in (narrative + contextual actions). Right: the
   teaching panel — live spotlight (`⏳ event wait → 🔀 switch → 🔗 join → 🔁 retry → ✦ end`), the
   workflow construct behind it, and a five-room map with a moving token.
 - **`/race`** — facilitator view. Every active instance as a card racing across the five rooms; first
@@ -204,6 +205,15 @@ proximity. Re-deriving bands client-side would create a second source of truth t
 time a threshold moves. The ramp stays inside the phosphor palette (`--heat-0` … `--heat-6` in
 [`app.css`](src/app.css)): on a CRT, hotter reads as brighter and amber-shifted, and a blue mercury
 column in a green terminal looks like a different application.
+
+## Testing the riddle UI
+
+The riddle panel and its thermometer are **not reachable as every class**. A warrior bashes the left
+gate open, so the input never renders; a mage solves near-misses, so a gate rarely holds. To exercise
+the panel, start as **`balanced`** (or `mage` if you want to see Mage Insight fire) and go **left** —
+or go **right** as any class, since the right-hand door always poses a riddle.
+
+That asymmetry is easy to forget and means the panel can break without anyone noticing.
 
 ## Theming
 

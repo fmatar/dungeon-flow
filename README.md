@@ -13,6 +13,7 @@ produced what you just felt.
 
 ```
  Entrance ─▶ Fork ─(left)─▶ ⛬ Riddle ─▶ Lever Room ─(A & B)─▶ Trap Corridor ─(pick)─▶ Treasure ✦END
+              │           └─(STR ≥ 12)─▶ 🛡 bash the gate ─▶ ┘
               │  \─(right)──▶ ⛬ Riddle ────────────────────▶ Trap Corridor
               │  \─(unknown, or torch times out)───────────▶ respawn
               ▲                    │                                  │
@@ -22,7 +23,7 @@ produced what you just felt.
 | Room | Workflow primitive | What you experience |
 |---|---|---|
 | **Fork** | `listen` (event wait) + `switch` (data routing) + `timeout` | The game pauses, waiting for *you*. Dawdle and your torch dies. |
-| **Riddle gate** | `listen` + `switch` + bounded **retry** + **compensation** | Every door asks a riddle. Wrong answers tell you only *how warm* you were; three and it turns you back. |
+| **Riddle gate** | `listen` + `switch` + bounded **retry** + **compensation** | A door asks a riddle. Wrong answers tell you only *how warm* you were; three and it turns you back. A warrior skips the left one entirely — see [player classes](#player-classes). |
 | **Lever Room** | `listen … all(A, B)` — multi-event **join** | Pull one lever: nothing. Pull both, any order: the gate opens. |
 | **Trap Corridor** | bounded **retry** + **compensation** | The lock jams at random. Three failures and a trap flings you back. |
 | **Treasure Room** | terminal state (`end`) | `victory: true`, instance `COMPLETED`. |
@@ -40,7 +41,7 @@ definition worth reading.
 
 - [Quick start](#quick-start) — pick your path in 30 seconds
 - [For developers](#for-developers) — dev mode, hot reload, tests
-- [Playing it](#playing-it) — browser and curl
+- [Playing it](#playing-it) — browser, curl, and [player classes](#player-classes)
 - [HTTP API](#http-api)
 - [For operators](#for-operators) — build, containerize, deploy
 - [Publishing to your own registry](#publishing-to-your-own-registry) — fork-friendly
@@ -243,7 +244,8 @@ trap, and a live spotlight naming the construct currently firing. Details in
 ### With curl
 
 ```bash
-# 1) Start a game — returns your instance id and the entrance narrative
+# 1) Start a game — returns your instance id, the entrance narrative, and your class/stats.
+#    Add ?class=warrior|rogue|mage to change how the dungeon treats you (see Player classes).
 curl -s -XPOST http://localhost:8080/api/dungeon | jq
 ID=<paste instanceId>
 
@@ -292,6 +294,30 @@ In [`application.properties`](src/main/resources/application.properties) — gam
 | `dungeon.riddle.max-attempts` | `3` | Riddle attempts before the gate turns you back |
 | `dungeon.fork.torch-timeout` | `PT60S` | Idle time at the fork before respawn (ISO-8601) |
 
+### Player classes
+
+Pick a class when you start, and your stats change **which primitives you actually meet**. This is
+data-driven routing: the workflow switches on the stats, so a class is not a cosmetic label.
+
+```bash
+curl -s -XPOST 'http://localhost:8080/api/dungeon?class=warrior' | jq '.playerClass, .stats'
+```
+
+| Class | STR | DEX | INT | What its stats unlock |
+|---|---|---|---|---|
+| `warrior` | **18** | 10 | 8 | **Bashes the left gate open**, bypassing that riddle entirely |
+| `rogue` | 10 | **18** | 8 | **Picks the Trap Corridor lock first try**, every time |
+| `mage` | 8 | 10 | **18** | **Mage Insight** — a near-miss answer (proximity ≥ 0.5) counts as solved |
+| `balanced` *(default)* | 10 | 10 | 10 | Nothing. Every gate and lock behaves normally |
+
+Each bypass triggers on **its stat ≥ 12**, which no class reaches by accident — the threshold is
+effectively "this is your speciality". Omit `?class=` and you get `balanced`.
+
+> **This matters when you demo or test.** As a **warrior you never see the riddle input** on the left
+> path, and as a **rogue you never see the trap retry loop**. If you are showing the riddle gate or the
+> thermometer, start as `mage` or `balanced` — and note that a mage solves near-misses, so use
+> `balanced` to show a gate holding firm. The right-hand door always poses a riddle regardless of class.
+
 ---
 
 ## HTTP API
@@ -300,11 +326,11 @@ All endpoints are under `/api` (`quarkus.rest.path=/api`), leaving `/` free for 
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/dungeon` | Start a session → `instanceId` + entrance view + torch timeout |
+| `POST /api/dungeon?class=warrior\|rogue\|mage` | Start a session → `instanceId`, entrance view, torch timeout, `playerClass` + `stats`. Omit `class` for `balanced` |
 | `POST /api/dungeon/{id}/choice` `{"direction":"left"\|"right"}` | Fork choice |
 | `POST /api/dungeon/{id}/riddle` `{"answer":"…"}` | Answer the riddle gating a door. `409` if no gate is posed |
 | `POST /api/dungeon/{id}/lever-a` · `POST /api/dungeon/{id}/lever-b` | Pull a lever |
-| `GET /api/dungeon/{id}` | Inspect current room, narrative and status |
+| `GET /api/dungeon/{id}` | Inspect current room, narrative, status, the posed `riddle` (if any), `playerClass` + `stats` |
 | `GET /api/dungeon/{id}/stream` | **SSE** stream of room transitions + lock attempts |
 | `GET /api/dungeon` | List all sessions |
 | `DELETE /api/dungeon/{id}` | Cancel and forget a session |
@@ -596,6 +622,9 @@ For a room full of people playing at once, open `/race` on the projector instead
   [`RiddleService`](src/main/java/org/acme/dungeon/RiddleService.java) only scores *how close* an
   answer was; it never decides whether the door opens. Proximity blends edit distance with token
   overlap so a right idea always reads warm, and drives the animated thermometer in the UI.
+- **Classes route in the workflow, not in Java.** A stat check produces a *value*
+  (`"warrior"` / `"normal"`) and a `switchCase` routes on it, so the class-conditional path is visible
+  in the diagram rather than hidden in an `if`. The threshold lives in one place per bypass.
 - **Completion is visible.** `GET /api/dungeon/{id}` returns `200` with the victory view after an
   instance completes, so the player actually sees the win, and `404` only for an unknown id.
 
