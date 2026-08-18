@@ -31,6 +31,7 @@ import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -76,27 +77,32 @@ public class DungeonResource {
     // "No serializer found ... you may need to configure reflection" - a native-only failure that
     // the JVM build cannot reveal. The domain records are registered on DungeonWorkflow.
     @RegisterForReflection
-    public record StartResponse(String instanceId, GameView entrance, long torchTimeoutSeconds) {
+    public record StartResponse(String instanceId, GameView entrance, long torchTimeoutSeconds, String playerClass, PlayerStats stats) {
     }
 
     /** {@code riddle} is null unless a gate is currently holding this instance. */
     @RegisterForReflection
-    public record StateResponse(String instanceId, String status, GameView view, RiddleView riddle) {
+    public record StateResponse(String instanceId, String status, GameView view, RiddleView riddle, String playerClass, PlayerStats stats) {
     }
 
     // === REQ-FUNC-001: start a game instance ================================================
 
     @POST
-    public Response start() {
-        WorkflowInstance instance = workflow.instance(Map.of());
-        store.register(instance);
+    public Response start(@QueryParam("class") String playerClass) {
+        String pClass = playerClass == null ? "balanced" : playerClass.toLowerCase();
+        PlayerStats stats = PlayerStats.of(pClass);
+        WorkflowInstance instance = workflow.instance(Map.of(
+            "playerClass", pClass,
+            "stats", stats
+        ));
+        store.register(instance, pClass, stats);
         // Fire-and-forget: the engine runs the opening rooms and parks at the fork listen.
         instance.start();
         awaitArmed(instance);
-        LOG.info("Started dungeon instance {}", instance.id());
+        LOG.info("Started dungeon instance {} with class {}", instance.id(), pClass);
         // The opening scene is always the Entrance (REQ-FUNC-001); the player is now at the fork.
         return Response.status(Response.Status.CREATED)
-                .entity(new StartResponse(instance.id(), Narratives.ENTRANCE, torchSeconds()))
+                .entity(new StartResponse(instance.id(), Narratives.ENTRANCE, torchSeconds(), pClass, stats))
                 .build();
     }
 
@@ -193,7 +199,8 @@ public class DungeonResource {
         // Note: we return 200 with the victory view on completion so the player actually sees the win
         // (REQ-FUNC-006). Strict REQ-FUNC-007 "404 after completion" is a one-line change here if
         // preferred; see README > Design decisions.
-        return Response.ok(new StateResponse(id, status.name(), view, store.riddle(id).orElse(null)))
+        return Response.ok(new StateResponse(id, status.name(), view, store.riddle(id).orElse(null),
+                store.playerClass(id), store.stats(id)))
                 .build();
     }
 
@@ -205,7 +212,9 @@ public class DungeonResource {
         store.all().forEach((id, instance) ->
                 out.add(new StateResponse(id, instance.status().name(),
                         store.view(id).orElse(Narratives.ENTRANCE),
-                        store.riddle(id).orElse(null))));
+                        store.riddle(id).orElse(null),
+                        store.playerClass(id),
+                        store.stats(id))));
         return out;
     }
 

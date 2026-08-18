@@ -38,3 +38,5 @@ web/pnpm-lock.yaml
 .codex/
 skills-lock.json
 loadtest/
+.agent/
+.impeccable/

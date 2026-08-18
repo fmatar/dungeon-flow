@@ -1,5 +1,5 @@
 import { answerRiddle, choose, cleanup, pullLever, startGame, streamUrl } from './api';
-import type { GameView, RiddleView, Room, Status, StreamEvent, Temperature } from './types';
+import type { GameView, RiddleView, Room, Status, StreamEvent, Temperature, PlayerStats } from './types';
 
 export interface Attempt {
 	attempt: number;
@@ -26,6 +26,8 @@ export class Game {
 	view = $state<GameView | null>(null);
 	status = $state<Status | null>(null);
 	torchSeconds = $state(60);
+	playerClass = $state<string | null>(null);
+	stats = $state<PlayerStats | null>(null);
 
 	leverA = $state(false);
 	leverB = $state(false);
@@ -70,14 +72,16 @@ export class Game {
 		return 'FREEZING';
 	}
 
-	async start(): Promise<void> {
+	async start(playerClass?: string): Promise<void> {
 		this.reset();
 		this.busy = true;
 		try {
-			const s = await startGame();
+			const s = await startGame(playerClass);
 			this.id = s.instanceId;
 			this.view = s.entrance;
 			this.torchSeconds = s.torchTimeoutSeconds;
+			this.playerClass = s.playerClass;
+			this.stats = s.stats;
 			this.status = 'RUNNING';
 			this.connect(s.instanceId);
 		} catch (e) {
@@ -187,6 +191,8 @@ export class Game {
 		this.forkEntries = 0;
 		this.connected = false;
 		this.error = null;
+		this.playerClass = null;
+		this.stats = null;
 	}
 
 	/** What workflow primitive is firing right now - the teaching panel's headline. */

@@ -20,8 +20,9 @@ async function ok(res: Response): Promise<Response> {
 }
 
 /** POST /dungeon - start a new session. */
-export async function startGame(): Promise<StartResponse> {
-	const res = await ok(await fetch(BASE, { method: 'POST' }));
+export async function startGame(playerClass?: string): Promise<StartResponse> {
+	const url = playerClass ? `${BASE}?class=${playerClass}` : BASE;
+	const res = await ok(await fetch(url, { method: 'POST' }));
 	return res.json();
 }
 
