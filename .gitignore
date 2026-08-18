@@ -34,8 +34,17 @@ web/pnpm-lock.yaml
 
 # Local agent/tooling scratch — not part of the project
 .agents/
-.claude/
 .codex/
+
+# .claude holds installed third-party skills and local settings, which are not ours to track.
+# Git cannot re-include a path whose parent is excluded, so the project's OWN skills are
+# un-ignored explicitly, one directory at a time.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/quarkus-svelte-single-container/
+!.claude/skills/container-image-arch-verify/
+!.claude/skills/quarkus-flow-dsl-patterns/
 skills-lock.json
 loadtest/
 .agent/
