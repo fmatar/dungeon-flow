@@ -47,9 +47,12 @@ Flow → Workflows** — and put it next to the game.
 
 Play deliberately:
 
+0. **Pick a class first.** The screen offers warrior / rogue / mage. Take **balanced** (or `mage`) for
+   now — a warrior's Strength bashes the left gate open, and you would skip the primitive we are here
+   to see. That the class changes your route at all is the point; we come back to it below.
 1. At the fork, **don't click anything.** The engine is parked on an event wait, consuming nothing,
    waiting for a human. Watch the torch ring drain.
-2. Go **left**. A **riddle gate** stops you: the engine parks on another `listen`, and a wrong answer
+2. Go **left**. A **riddle gate** stops you (unless you chose warrior — see step 0): the engine parks on another `listen`, and a wrong answer
    tells you only *how warm* you were, on an animated thermometer. Get it wrong on purpose once to
    watch the gauge move and a hint appear — that is a bounded retry you can feel.
 3. Answer it, then pull **only lever A**. Nothing happens. That's a multi-event join *holding*. Pull
@@ -64,6 +67,11 @@ felt is right there, and **no Java decides where the player goes**.
 ✅ **Checkpoint** — the riddle gate holds the door and the thermometer moves on a wrong answer; one
 lever does nothing; two levers open the gate; you can point at the `listen`, `switch` and `all(...)`
 calls that caused all three.
+
+**Then run it again as a `warrior` and go left.** No riddle: the gate is bashed open. Same workflow,
+different path, because a `switchCase` routed on your Strength. That is data-driven routing you can
+feel, and it is the cheapest possible demonstration of why the decision belongs in the workflow rather
+than in Java.
 
 > **Dev mode only:** that diagram does not exist in the container images. Remember this in module 4.
 

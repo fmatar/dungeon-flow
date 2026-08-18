@@ -83,23 +83,103 @@ scripts/dungeon.sh --push --no-run
 
 ## Update a running workload
 
-The artifact points at a mutable `:latest`, so a new image needs a rolling replacement to be picked
-up. Confirm no replacement is already in flight first — `POST` is **not** idempotent, and calling it
-twice queues a second swap:
+Pushing an image changes **nothing** about what is running, and three separate rules make this less
+obvious than it looks. All were learned by getting them wrong.
 
-```bash
-curl -sS -H "Authorization: Bearer $DATAROBOT_API_TOKEN" "$DATAROBOT_ENDPOINT/workloads/$WID/replacement/" -o /dev/null -w '%{http_code}\n'
+### 1. `dr workload start` may reuse a cached image
+
+Starting a stopped workload can come up on the **old** image while reporting `running` and healthy. A
+mutable tag like `:latest` gives the platform no reason to re-pull. Never treat "running" as "updated".
+
+### 2. Same-artifact replacement works only for DRAFT artifacts
+
+```
+422 {"detail":["Cannot replace with the same artifact — candidate artifact ID matches current artifact."]}
 ```
 
-`404` means "none in progress" and is the normal, healthy answer. Then:
+Drafts are **exempt** from that rule, so passing the current `artifactId` is fine while the artifact is
+a draft and refused once it is locked. Check before you plan around it:
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' -d '{"artifactId":"'"$AID"'","strategy":"rolling"}' "$DATAROBOT_ENDPOINT/workloads/$WID/replacement/"
+curl -sS -H "Authorization: Bearer $DATAROBOT_API_TOKEN" "$DATAROBOT_ENDPOINT/artifacts/$AID/" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"
 ```
 
-The replacement is finished when the workload is `running` **and** the replacement endpoint returns
-`404` again. Verify the new image actually landed rather than assuming it — with a mutable tag a
-cached pull is a real possibility. The proof is the mount point in the served HTML (below).
+### 3. Candidate and current status must match
+
+```
+400/422 {"detail":["Artifact status mismatch: current locked, new draft"]}
+```
+
+draft↔draft or locked↔locked. If the running artifact is locked, lock the candidate first
+(`PATCH /artifacts/{id}/ {"status":"locked"}`).
+
+### The recommended flow: an immutable tag per commit
+
+This sidesteps every rule above and makes a deploy deterministic instead of hoping a cache missed.
+
+```bash
+SHA=$(git rev-parse --short HEAD)
+./scripts/dungeon.sh --push --no-run                        # or --native --platform linux/amd64 --push
+docker tag  ghcr.io/OWNER/dungeon-flow:latest ghcr.io/OWNER/dungeon-flow:jvm-$SHA
+docker push ghcr.io/OWNER/dungeon-flow:jvm-$SHA
+```
+
+Then create a **new artifact** on that tag and replace onto it — a new artifact id means rules 2 and 3
+cannot bite:
+
+```bash
+# clone the running artifact's spec, point it at the immutable tag, POST it as a new artifact
+curl -sS -H "Authorization: Bearer $DATAROBOT_API_TOKEN" "$DATAROBOT_ENDPOINT/artifacts/$AID/" -o /tmp/a.json
+python3 - <<'EOF'
+import json
+a = json.load(open('/tmp/a.json'))
+spec = a['spec']
+for g in spec['containerGroups']:
+    for c in g['containers']:
+        c['imageUri'] = 'ghcr.io/OWNER/dungeon-flow:jvm-SHA'
+json.dump({'name': 'dungeon-flow-SHA', 'spec': spec}, open('/tmp/new.json', 'w'))
+EOF
+curl -sS -X POST -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' \
+  --data @/tmp/new.json "$DATAROBOT_ENDPOINT/artifacts/"        # -> new artifact id, status draft
+```
+
+Match its status to the running artifact's, then replace. Confirm nothing is already in flight first —
+`POST` is **not** idempotent, and a second call queues another swap. `404` there means "none in
+progress" and is the healthy answer:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $DATAROBOT_API_TOKEN" \
+  "$DATAROBOT_ENDPOINT/workloads/$WID/replacement/"
+curl -sS -X POST -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"artifactId\":\"$NEW_AID\",\"strategy\":\"rolling\"}" \
+  "$DATAROBOT_ENDPOINT/workloads/$WID/replacement/"
+```
+
+The roll is finished when the workload is `running` **and** the replacement endpoint returns `404`
+again. Watch for a false positive here: if the `POST` itself failed (422), the endpoint returns `404`
+immediately and a naive "running + 404" check reads that as success. Assert the `POST` returned `202`.
+
+### Simpler alternative when the artifact is a draft
+
+`PATCH /workloads/{id}/settings/` — re-send the runtime body (`GET .../settings/` returns its shape;
+even unchanged values trigger the roll). It re-reads the artifact's current spec and its latest
+`COMPLETED` build's `imageUri`, so it rolls onto the newest image without a new artifact.
+
+### Then verify what is actually serving
+
+Never assume. The strongest cheap signal is a content-derived value from the artifact — this app's
+frontend asset filenames are content-hashed:
+
+```bash
+curl -sS -H "Authorization: Bearer $DATAROBOT_API_TOKEN" \
+  "$DATAROBOT_ENDPOINT/endpoints/workloads/$WID/" | grep -oE 'entry/start\.[^.]+\.js' | head -1
+```
+
+Compare it to the same file inside the image you pushed. Identical hashes mean byte-identical builds;
+different ones mean a cached pull, whatever the status says. A behavioural check is just as good:
+a feature that only exists in the new code, e.g. `GET /api/dungeon/{id}` returning a `riddle` object
+after choosing a direction.
 
 ---
 
