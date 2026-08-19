@@ -407,6 +407,22 @@ Three things about this that are not guessable:
   the `proton_id` on what you are looking at against the workload's current `protonId`. Every roll
   creates a new proton, and *my change did not work* is very often *the old version is still draining*.
 
+And one that only bites in production: **a locked artifact rejects same-artifact replacement.** The
+call above is fine when the artifact is a draft, but re-sending a *locked* artifact id returns `422`.
+When you need to restart production without changing what it runs — a new credential value, say — roll
+it through settings instead:
+
+```bash
+curl -sS -X PATCH "$DATAROBOT_ENDPOINT/workloads/<workload-id>/settings/" \
+  -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"runtime": { ... }}'
+```
+
+Send the workload's **current** runtime back, read from `GET /workloads/<id>/`, rather than a partial
+body from a file in your repo. Only the fields you send are applied, so a body that omits
+`resourceBundles` can silently drop the compute bundle as a side effect of a restart that was meant to
+change nothing at all.
+
 ### The thing nobody expects
 
 The workload is served under a **path prefix** — `/api/v2/endpoints/workloads/<id>/` — which the
@@ -507,6 +523,15 @@ them at the worst time unless you build native in CI.
 - **Mutable tags don't redeploy themselves.** Pushing a new `:latest` changes nothing until you roll
   the workload — and then you must verify the new image actually landed. Same trap one level up: a
   *completed build* does not reach a running container either.
+- **Adding an extension can add a dependency that is invisible in the diff.** Adding
+  `quarkus-opentelemetry` to the gateway agent silently enabled a dev service that starts a Grafana
+  container through testcontainers, so `quarkus dev` began requiring Docker. Nothing in the changed
+  lines said so, and it only failed on machines where Docker was down. After adding any extension,
+  start dev mode once on a clean machine before you trust it.
+- **A generic error message is a debugging cost, not a UX nicety.** That same failure surfaced in the
+  browser as only `Connection lost` — the client's handler for *any* socket close. Hours went into the
+  deployment before anyone checked whether the local backend was listening at all. When you write the
+  catch-all, make it say which of its causes it could not distinguish.
 
 ---
 
@@ -589,6 +614,36 @@ failure as everything in module 9:
   (`/otel/experiment_container/<id>/traces/`).
 - `/otel/workload/<workload-id>/traces/` is **not** where application traces land — it returns the
   platform's own gateway spans, which looks exactly like an app that is not exporting.
+
+**4. The model key belongs in a credential, and whose key it is matters.** Inject it by reference so it
+is never in the spec or the image:
+
+```json
+{ "source": "dr-credential", "name": "MY_API_KEY",
+  "drCredentialId": "<credential-id>", "key": "apiToken" }
+```
+
+That much is easy to get right. The part that is not: a credential holds a **copy** of whatever key you
+put in it, and it cannot refresh itself. Point it at your *personal* API key and production now depends
+on the lifetime of your own session — when that key rotates or expires, every request fails with
+
+```
+AuthenticationException: {"message": "Invalid Authorization header"}
+```
+
+and it will look like the app broke rather than the key. Use a dedicated or service-account key.
+
+Three details around that, each of which cost time:
+
+- **A presence check cannot detect it.** An endpoint reporting `keyConfigured: true` and the right key
+  length is telling the truth — only *validity* is gone, and nothing short of calling the provider
+  reveals that. Health checks that assert a key exists will stay green through the whole outage.
+- **Changing a credential does not reach a running container.** The value updates instantly and the app
+  keeps using the old one until you roll it. This is the single most common "I fixed it and nothing
+  happened" in this whole API.
+- **Creating and revoking keys is browser-only.** `GET /account/apiKeys/` returns `401` to a bearer
+  token and `DELETE` returns `405`; key management sits behind a session, not an API token. So the one
+  step you cannot automate is the one at the start — budget a human for it.
 
 One more thing worth taking from it: the readiness probe hitting `/` every ten seconds produced **22 of
 the first 25** exported traces, so the app suppresses that path. Telemetry has a signal-to-noise
