@@ -320,12 +320,22 @@ Small, and worth knowing before you write any YAML:
 |---|---|
 | Port | `8080`, and it **must be ≥ 1024** |
 | Health | `GET /` — a static file, so readiness doesn't wait for a warm engine |
-| Replicas | exactly **1** (this app holds state in memory) |
+| Replicas | exactly **1** (this app holds state in memory — and see below, the platform gives you one anyway) |
 | Filesystem | **read-only**, running **non-root** |
 | Architecture | **linux/amd64** |
 
 Two of those decided this app's architecture. Read them again — non-root and read-only is why there's
 no nginx sidecar, and why the UI is served by Quarkus.
+
+> **On replicas: asking for more does not get you more.** Measured on a later project, across
+> independent rolls: `replicaCount: 2` gave 2 pods scheduled and **1 ready**; `replicaCount: 3` gave 3
+> scheduled and **1 ready**. The apps were healthy (clean startup logs, `restartCount: 0`); the
+> readiness check traverses DataRobot's authenticated edge at a *proton-level* URL that resolves to a
+> single pod, so only that pod can ever pass it. The tell is a probe failure of **HTTP 401** against an
+> app with no authentication — a kubelet hitting the pod directly could only ever get 200 or a
+> connection error. So `replicaCount: 1` is not a limitation you are working around here; it is what
+> you get regardless. Accept the consequence: each deploy is a brief hard cutover, not a zero-downtime
+> roll.
 
 ### Author the spec
 
@@ -372,6 +382,30 @@ DATAROBOT_CLI_FEATURE_WORKLOAD=true dr workload create --spec-file deploy/dataro
 Watch it reach `running`, then open the endpoint in a browser and play.
 
 ✅ **Checkpoint** — a full playthrough on the platform: one lever holds the join, both levers win.
+
+### Rolling a new version
+
+`dr workload create` is the *first* deploy. After that you roll the existing workload, which keeps the
+endpoint URL stable:
+
+```bash
+curl -sS -X POST "$DATAROBOT_ENDPOINT/workloads/<workload-id>/replacement/" \
+  -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"artifactId":"<artifact-id>","strategy":"rolling"}'
+```
+
+Three things about this that are not guessable:
+
+- The path is `/replacement/`, **singular**. `/replacements/` returns a plain
+  `{"detail":"Not Found"}` — which reads like a permissions or id problem rather than a typo, and
+  nothing is triggered.
+- Poll with `GET` on the same path. It returns 200 while the roll is in progress
+  (`submitted` then `initializing` then `promoting`) and **404 when it is done** — a completion signal
+  that looks like an error.
+- The previous generation keeps running for `keepOldVersionMinutes` afterwards, still serving in-flight
+  work and still emitting its own telemetry. If you are checking whether a change took effect, compare
+  the `proton_id` on what you are looking at against the workload's current `protonId`. Every roll
+  creates a new proton, and *my change did not work* is very often *the old version is still draining*.
 
 ### The thing nobody expects
 
@@ -471,7 +505,8 @@ them at the worst time unless you build native in CI.
 - **`localhost` is not `127.0.0.1`.** macOS resolves it to `::1` first. A Vite dev server on the IPv6
   side of a port will silently answer instead of your container, and you'll debug the wrong process.
 - **Mutable tags don't redeploy themselves.** Pushing a new `:latest` changes nothing until you roll
-  the workload — and then you must verify the new image actually landed.
+  the workload — and then you must verify the new image actually landed. Same trap one level up: a
+  *completed build* does not reach a running container either.
 
 ---
 
@@ -502,6 +537,63 @@ write.**
 > Check the current gateway path in your DataRobot docs before relying on it — and prefer a stored
 > credential over a token in a config file.
 
+### The built-out version of this appendix
+
+That agent now exists: **[`datarobot/bogzee`](https://github.com/datarobot/bogzee)** — a streaming
+Quarkus chatbot on LangChain4j that calls the gateway, executes tools, and shows each tool call
+succeeding or failing in the UI. It runs on the Workload API through exactly the mechanics above, and
+it settles three questions this lab leaves open.
+
+**1. You do not need a public registry.** Module 6 publishes to ghcr.io because DataRobot cannot pull
+from a *private* registry — image-pull credentials are not accepted at workload creation. The way out
+is **Code-to-Workload**: upload the source and let the platform build the image.
+
+```bash
+dr artifact code sync -y     # upload the working tree (respects .wapiignore)
+dr artifact build create     # the platform builds it
+```
+
+Nothing is ever published anywhere public. Wait for the build to reach **`COMPLETED`**, not `BUILT` —
+`BUILT` means built-but-not-yet-pushed, and scheduling on it fails with
+`422 runtime_image_uri ... None`.
+
+**2. Promotion is a second artifact, not a copied one.** An artifact is either a **draft**
+(rebuildable) or **locked** (immutable, versioned, permanently undeletable). You keep dev as a draft —
+locking the thing you iterate on would remove your iteration target — and promote by building a *new*
+artifact from the **same catalog version** dev just proved, then locking that. The two environments are
+then byte-identical in source rather than merely similar. A replacement between mismatched statuses is
+refused: draft↔draft and locked↔locked only.
+
+**3. A real agent needs somewhere to send its telemetry.** OTel export targets an *entity*, and for an
+application that entity is a **Use Case** you create first:
+
+```bash
+curl -sS -X POST "$DATAROBOT_ENDPOINT/useCases/" \
+  -H "Authorization: Bearer $DATAROBOT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"my-agent","description":"Telemetry target."}' | jq -r '.id'
+```
+
+```
+QUARKUS_OTEL_SDK_DISABLED=false
+DATAROBOT_OTEL_ENDPOINT=https://app.datarobot.com/otel
+DATAROBOT_ENTITY_ID=experiment_container-<use-case-id>
+DATAROBOT_API_TOKEN=<by credential reference>
+```
+
+Three ways that goes wrong, each of which produces **no traces and no error** — the same shape of
+failure as everything in module 9:
+
+- The ingest headers are `X-DataRobot-Entity-Id` and `X-DataRobot-Api-Key`, **not** the
+  `Authorization: Bearer` the REST API takes.
+- The entity id is **prefixed in the export header and raw in the read path**
+  (`/otel/experiment_container/<id>/traces/`).
+- `/otel/workload/<workload-id>/traces/` is **not** where application traces land — it returns the
+  platform's own gateway spans, which looks exactly like an app that is not exporting.
+
+One more thing worth taking from it: the readiness probe hitting `/` every ten seconds produced **22 of
+the first 25** exported traces, so the app suppresses that path. Telemetry has a signal-to-noise
+problem the moment it works.
+
 ---
 
 ## Where to go next
@@ -513,6 +605,8 @@ write.**
 | The UI, and the two rules that bite | [`web/README.md`](../../web/README.md) |
 | Deploying anywhere | [`deploy/README.md`](../../deploy/README.md) |
 | Workload API operations | [`deploy/datarobot/README.md`](../../deploy/datarobot/README.md) |
+| A gateway agent built on these mechanics | [`datarobot/bogzee`](https://github.com/datarobot/bogzee) |
+| Its Workload API runbook — Use Case, credentials, promotion, locking, telemetry | [`bogzee/deploy/datarobot/README.md`](https://github.com/datarobot/bogzee/blob/main/deploy/datarobot/README.md) |
 
 **One thing to take away:** every hard problem in this lab was an *environment* problem — an
 architecture mismatch, a read-only filesystem, a stripped path prefix, a probe timeout, missing

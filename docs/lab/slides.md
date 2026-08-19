@@ -353,7 +353,7 @@ Everything else in this lab — container, probes, single replica, path prefix, 
 |---|---|
 | Port | `8080` — **must be ≥ 1024** |
 | Health | `GET /` (static file — no warm engine needed) |
-| Replicas | **1** (this app holds state in memory) |
+| Replicas | **1** — and the platform gives you 1 regardless (measured: 2→1 ready, 3→1 ready) |
 | Filesystem | **read-only**, **non-root** |
 | Architecture | **linux/amd64** |
 
